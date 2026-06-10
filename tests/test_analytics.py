@@ -1,4 +1,4 @@
-"""Tests for analytics.py and the new DuckDB-backed MCP tools."""
+"""Tests for analytics.py and the new history-backed MCP tools."""
 import asyncio
 from unittest.mock import MagicMock, patch
 
@@ -11,11 +11,9 @@ from plaid_client import ItemHealth, SecretStr, plaid_call_count
 
 
 @pytest.fixture
-def seeded_db(tmp_path, monkeypatch):
-    """A DuckDB store seeded with multi-month sandbox-shaped data."""
-    path = str(tmp_path / "finance.duckdb")
-    monkeypatch.setenv("FINANCE_DB_PATH", path)
-    conn = storage.open_db(path)
+def seeded_db(db):
+    """The Postgres test store seeded with multi-month sandbox-shaped data."""
+    conn = db
     txs = [
         # (id, date, amount, category, merchant, pending)
         ("t1", "2025-01-05", 12.50, "FOOD_AND_DRINK", "Starbucks", False),
@@ -29,19 +27,18 @@ def seeded_db(tmp_path, monkeypatch):
     ]
     for tid, dt, amt, cat, merch, pending in txs:
         conn.execute(
-            "INSERT INTO transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,now())",
+            "INSERT INTO transactions VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())",
             (tid, "acc_chk", "CHASE", dt, dt, amt, "USD", merch,
              f"{merch} txn", cat, f"{cat}_X", pending),
         )
     for sd, cur in (("2025-01-31", 1000.0), ("2025-02-28", 1500.0), ("2025-03-31", 2000.0)):
         conn.execute(
-            "INSERT INTO balance_snapshots VALUES (?, now(), 'acc_chk', 'CHASE', 'Chase', "
-            "'depository', 'checking', ?, ?, NULL, 'USD')", (sd, cur, cur))
+            "INSERT INTO balance_snapshots VALUES (%s, now(), 'acc_chk', 'CHASE', 'Chase', "
+            "'depository', 'checking', %s, %s, NULL, 'USD')", (sd, cur, cur))
         conn.execute(
-            "INSERT INTO balance_snapshots VALUES (?, now(), 'acc_cc', 'CHASE', 'Chase', "
+            "INSERT INTO balance_snapshots VALUES (%s, now(), 'acc_cc', 'CHASE', 'Chase', "
             "'credit', 'credit card', 400.0, NULL, 5000.0, 'USD')", (sd,))
-    conn.close()
-    return path
+    return conn
 
 
 def test_aggregate_spending_by_category_by_month(seeded_db):
@@ -107,7 +104,7 @@ def test_query_finances_select_works_and_writes_rejected(seeded_db):
 
 def test_query_finances_connection_is_readonly(seeded_db):
     # Even if validation were bypassed, the connection itself is read-only.
-    conn = storage.open_readonly(seeded_db)
+    conn = storage.open_readonly()
     with pytest.raises(Exception):
         conn.execute("DELETE FROM transactions")
     conn.close()
@@ -182,7 +179,7 @@ def test_describe_tables_reports_schema_and_notes(seeded_db):
     tx = out["tables"]["transactions"]
     assert "outflow" in tx["description"]
     cols = {c["name"]: c for c in tx["columns"]}
-    assert cols["amount"]["type"] == "DOUBLE"
+    assert cols["amount"]["type"] == "double precision"
     assert "Positive = money out" in cols["amount"]["note"]
     assert any("outflow" in c for c in out["conventions"])
 

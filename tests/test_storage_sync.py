@@ -1,4 +1,7 @@
-"""Tests for storage.py + sync.py: cursor flow, idempotency, snapshots."""
+"""Tests for storage.py + sync.py: cursor flow, idempotency, snapshots.
+
+The ``db`` fixture (conftest.py) provides a truncated Postgres test database.
+"""
 import pytest
 
 import storage
@@ -53,15 +56,6 @@ class FakeSyncApi:
             "next_cursor": f"cur-{idx + 1}",
             "has_more": idx + 1 < len(self.pages),
         })
-
-
-@pytest.fixture
-def db(tmp_path, monkeypatch):
-    path = str(tmp_path / "finance.duckdb")
-    monkeypatch.setenv("FINANCE_DB_PATH", path)
-    conn = storage.open_db(path)
-    yield conn
-    conn.close()
 
 
 def test_sync_pagination_and_cursor_persisted(db):

@@ -553,7 +553,7 @@ search_transactions = mcp.tool(
 
 
 # ---------------------------------------------------------------------------
-# Local-history tools (DuckDB-backed). See storage.py / sync.py / analytics.py.
+# History tools (Postgres-backed). See storage.py / sync.py / analytics.py.
 # ---------------------------------------------------------------------------
 
 import analytics  # noqa: E402
@@ -563,7 +563,7 @@ from plaid_client import plaid_call_count  # noqa: E402
 
 
 def _sync_now_impl() -> dict:
-    """Pull new/changed transactions and record today's snapshots into DuckDB.
+    """Pull new/changed transactions and record today's snapshots into Postgres.
 
     Runs the /transactions/sync cursor flow for every healthy Item (resuming
     from each Item's stored cursor) and appends dated balance, holdings, and
@@ -646,7 +646,7 @@ aggregate_spending = mcp.tool(
 
 
 def _query_finances_impl(sql: str) -> dict:
-    """Escape hatch: run a single read-only SELECT against the local DuckDB.
+    """Escape hatch: run a single read-only SELECT against the history database.
 
     Tables: accounts, transactions, balance_snapshots, holdings_snapshots,
     liabilities_snapshots, sync_state. Only SELECT/WITH statements are
@@ -666,7 +666,7 @@ query_finances = mcp.tool(
 
 
 def _describe_tables_impl() -> dict:
-    """Describe the local DuckDB schema: tables, columns, types, and conventions.
+    """Describe the history database schema: tables, columns, types, and conventions.
 
     Call this before writing query_finances SQL or when unsure where data
     lives. Includes the Plaid sign convention (amount > 0 = outflow) and the
@@ -721,7 +721,7 @@ def _get_sync_status_impl() -> dict:
 
     Returns per-Item sync cursors/timestamps, row counts per table, and
     plaid_calls_this_session — the process-wide count of Plaid API calls,
-    useful to prove that DuckDB-backed tools answer without hitting Plaid.
+    useful to prove that history-backed tools answer without hitting Plaid.
     """
     conn = storage.open_readonly()
     try:

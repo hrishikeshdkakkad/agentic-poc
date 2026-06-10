@@ -30,14 +30,14 @@ claude : [calls get_recurring_transactions]
          Netflix ($15.99), Spotify ($11.99), NYT ($4), ...
 ```
 
-## Hybrid architecture: live balances + local history
+## Hybrid architecture: live balances + history store
 
-This fork adds a **local DuckDB history store** (`./data/finance.duckdb`) on top of the original live-only tools. Transactions are ingested via Plaid's `/transactions/sync` cursor flow, and dated balance / holdings / liabilities snapshots accumulate on every sync. That enables questions live Plaid calls can't answer: multi-year spending aggregations (no 2-year lookback cap), net worth over time, and arbitrary SQL — all with **zero Plaid calls** at question time. Current balances stay live.
+This fork adds a **Postgres history store** (managed, e.g. [Neon](https://neon.tech) — set `DATABASE_URL`) on top of the original live-only tools. Transactions are ingested via Plaid's `/transactions/sync` cursor flow, and dated balance / holdings / liabilities snapshots accumulate on every sync. That enables questions live Plaid calls can't answer: multi-year spending aggregations (no 2-year lookback cap), net worth over time, and arbitrary SQL — all with **zero Plaid calls** at question time. Current balances stay live.
 
 ```
-Plaid API ──/transactions/sync──▶ DuckDB (transactions, snapshots) ──▶ aggregate_spending,
-        └──live /accounts/balance/get──────────────────────────────▶ get_net_worth        net_worth_history,
-                                                                                          query_finances
+Plaid API ──/transactions/sync──▶ Postgres (transactions, snapshots) ──▶ aggregate_spending,
+        └──live /accounts/balance/get────────────────────────────────▶ get_net_worth      net_worth_history,
+                                                                                           query_finances
 ```
 
 Sync on demand (MCP tool) or on a schedule (cron) — no background daemon:
@@ -49,7 +49,7 @@ python sync.py                       # cron-able CLI; same effect as the sync_no
 
 ## Tools
 
-### Local-history tools (DuckDB-backed, this fork)
+### History tools (Postgres-backed, this fork)
 
 | Tool                    | What it does                                                                          |
 | ----------------------- | ------------------------------------------------------------------------------------- |
@@ -57,7 +57,7 @@ python sync.py                       # cron-able CLI; same effect as the sync_no
 | `get_net_worth`         | Live composed net worth by asset class: cash, investments, retirement (401k/IRA), credit, loans |
 | `get_net_worth_history` | Net worth per snapshot date, from local snapshots — zero Plaid calls                   |
 | `aggregate_spending`    | Spend by category/merchant, optionally by month, over any range — zero Plaid calls     |
-| `query_finances`        | Escape hatch: single read-only SELECT against the local DuckDB (writes rejected)       |
+| `query_finances`        | Escape hatch: single read-only SELECT against the history database (writes rejected)       |
 | `describe_tables`       | Local schema with column notes and conventions — call before writing SQL               |
 | `list_transactions`     | Raw stored transactions with filters (dates, category, merchant, amount) + paging — zero Plaid calls |
 | `get_sync_status`       | Store freshness, table counts, and the Plaid-API call counter                          |
@@ -83,7 +83,7 @@ All 9 tools are read-only. Each returns `{<data>: [...], "warnings": [...]}` so 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # set PLAID_CLIENT_ID, PLAID_SECRET (sandbox), PLAID_ENV=sandbox
+cp .env.example .env        # set PLAID_CLIENT_ID, PLAID_SECRET (sandbox), PLAID_ENV=sandbox, DATABASE_URL
 python sandbox_link.py      # headless-links First Platypus Bank with transactions+investments+liabilities
 python verify_e2e.py        # runs all tools, syncs twice, proves idempotency + zero-Plaid-call analytics
 python server.py            # serve on http://localhost:8000/mcp
@@ -149,9 +149,9 @@ For a deployment you can use from anywhere:
 ## Security
 
 - **Single-tenant.** One deployment per person. Don't share.
-- **Read-only.** No tool mutates state at any institution. Don't add any that do. `sync_now` writes only to the local DuckDB file.
+- **Read-only.** No tool mutates state at any institution. Don't add any that do. `sync_now` writes only to your own history database.
 - **Tokens encrypted at rest.** Access tokens live in a Fernet-encrypted store (`~/.config/personal-finance-mcp/tokens.enc`, keyfile chmod 600, outside the repo). Manage with `python secure_tokens.py list|add|remove|import`. `PLAID_TOKEN_*` env vars still work and override the store. Tokens are never logged or printed (`SecretStr` redaction everywhere).
-- **DB stays local.** `data/` is gitignored; transactions and snapshots never leave your machine.
+- **You own the history database.** Data lives in your own Postgres (e.g. a Neon project under your account). Use a dedicated database, keep `sslmode=require` in `DATABASE_URL`, and don't share the connection string — it grants read/write to your full transaction history.
 - **You own Plaid compliance.** You're the Plaid customer under your own account.
 
 Before each deploy:
@@ -176,7 +176,7 @@ More issues: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 - [server.py](server.py) — FastMCP server: 9 original live tools + 6 local-history tools.
 - [plaid_client.py](plaid_client.py) — Plaid SDK wrapper: `SecretStr` token redaction, 5-minute per-Item health cache, response shaping, structured error mapping, API call counter.
-- [storage.py](storage.py) — DuckDB schema + idempotent writes (transactions keyed by id, snapshots by date+account).
+- [storage.py](storage.py) — Postgres schema + idempotent writes (transactions keyed by id, snapshots by date+account); Neon-ready via DATABASE_URL.
 - [sync.py](sync.py) — `/transactions/sync` cursor flow + snapshot job; MCP tool and cron CLI share this.
 - [analytics.py](analytics.py) — read-only query layer: spending aggregation, net-worth composition/history, validated SQL escape hatch.
 - [secure_tokens.py](secure_tokens.py) — Fernet-encrypted token store + CLI.

@@ -65,7 +65,7 @@ def load_tokens() -> dict[str, SecretStr]:
     return out
 
 
-# Process-wide Plaid API call counter. Used to prove that DuckDB-backed
+# Process-wide Plaid API call counter. Used to prove that history-backed
 # query tools answer without touching Plaid (see get_sync_status).
 _plaid_call_count = 0
 

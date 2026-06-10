@@ -6,7 +6,7 @@ acceptance criteria:
 
   1. one correct answer per category: cash, spending, investments,
      retirement, debt
-  2. multi-month spend-by-category-by-month answered from DuckDB with
+  2. multi-month spend-by-category-by-month answered from Postgres with
      ZERO Plaid calls (proved via the process-wide call counter)
   3. get_net_worth composes correctly, and a second sync_now run is
      idempotent (no duplicate transactions)
@@ -39,6 +39,9 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 def main() -> int:
     if os.environ.get("PLAID_ENV", "").lower() != "sandbox":
         print("Set PLAID_ENV=sandbox (plus PLAID_CLIENT_ID / PLAID_SECRET).", file=sys.stderr)
+        return 2
+    if not os.environ.get("DATABASE_URL"):
+        print("Set DATABASE_URL to your Postgres (e.g. Neon) connection string.", file=sys.stderr)
         return 2
 
     from plaid_client import build_api, all_items, load_tokens, plaid_call_count
@@ -104,7 +107,7 @@ def main() -> int:
           f"{len(spend['rows'])} (month,category) rows, total ${spend['grand_total']}")
     check("net_worth_history has snapshots", bool(history["history"]))
     check("query_finances works read-only", q.get("rows") is not None)
-    check("ZERO Plaid calls for DuckDB tools", calls_before == calls_after,
+    check("ZERO Plaid calls for history-db tools", calls_before == calls_after,
           f"counter {calls_before} -> {calls_after}")
     rejected = srv._query_finances_impl("DELETE FROM transactions")
     check("query_finances rejects non-SELECT", "error" in rejected)

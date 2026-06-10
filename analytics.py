@@ -1,16 +1,15 @@
-"""Query layer over the local DuckDB store plus live net-worth composition.
+"""Query layer over the Postgres history store plus live net-worth composition.
 
-Everything here is read-only. aggregate_spending, net_worth_history, and
-query_finances answer purely from DuckDB — zero Plaid calls. get_net_worth
-composes from live balances (current truth) so it stays accurate between
-syncs.
+Everything here is read-only. aggregate_spending, net_worth_history,
+list_transactions, and query_finances answer purely from Postgres — zero
+Plaid calls. get_net_worth composes from live balances (current truth) so it
+stays accurate between syncs.
 """
 from __future__ import annotations
 
 import re
-from datetime import date
-
-import duckdb
+from datetime import date, datetime
+from decimal import Decimal
 
 import storage
 
@@ -74,22 +73,22 @@ def compose_net_worth(shaped_accounts: list[dict]) -> dict:
     }
 
 
-def net_worth_history(db_path: str | None = None) -> dict:
+def net_worth_history(db_url: str | None = None) -> dict:
     """Net worth per snapshot date, from balance_snapshots only."""
-    conn = storage.open_readonly(db_path)
+    conn = storage.open_readonly(db_url)
     try:
         rows = conn.execute(
             """
             SELECT
                 snapshot_date,
                 round(sum(CASE WHEN type IN ('depository','investment','brokerage')
-                               THEN current ELSE 0 END), 2) AS assets,
+                               THEN current ELSE 0 END)::numeric, 2) AS assets,
                 round(sum(CASE WHEN type IN ('credit','loan')
-                               THEN current ELSE 0 END), 2) AS liabilities,
-                round(sum(CASE WHEN type IN ('depository','investment','brokerage')
+                               THEN current ELSE 0 END)::numeric, 2) AS liabilities,
+                round((sum(CASE WHEN type IN ('depository','investment','brokerage')
                                THEN current ELSE 0 END)
-                    - sum(CASE WHEN type IN ('credit','loan')
-                               THEN current ELSE 0 END), 2) AS net_worth
+                     - sum(CASE WHEN type IN ('credit','loan')
+                               THEN current ELSE 0 END))::numeric, 2) AS net_worth
             FROM balance_snapshots
             GROUP BY snapshot_date
             ORDER BY snapshot_date
@@ -101,9 +100,9 @@ def net_worth_history(db_path: str | None = None) -> dict:
         "history": [
             {
                 "date": str(r[0]),
-                "assets": r[1],
-                "liabilities": r[2],
-                "net_worth": r[3],
+                "assets": float(r[1]),
+                "liabilities": float(r[2]),
+                "net_worth": float(r[3]),
             }
             for r in rows
         ]
@@ -116,9 +115,9 @@ def aggregate_spending(
     group_by: str = "category",
     monthly: bool = True,
     include_pending: bool = False,
-    db_path: str | None = None,
+    db_url: str | None = None,
 ) -> dict:
-    """Aggregate outflows from local transactions. Never calls Plaid.
+    """Aggregate outflows from stored transactions. Never calls Plaid.
 
     Spending = transactions with amount > 0 (Plaid's outflow convention),
     excluding inter-account transfers and loan/credit payments so moving
@@ -127,12 +126,12 @@ def aggregate_spending(
     # Validate inputs that get interpolated into SQL identifiers.
     if group_by not in ("category", "merchant"):
         raise ValueError("group_by must be 'category' or 'merchant'")
-    date.fromisoformat(start_date)
-    date.fromisoformat(end_date)
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
 
     group_col = "coalesce(category_primary, 'UNCATEGORIZED')" if group_by == "category" \
         else "coalesce(merchant, 'UNKNOWN')"
-    month_col = "strftime(date, '%Y-%m')"
+    month_col = "to_char(date, 'YYYY-MM')"
 
     select_keys = [f"{month_col} AS month"] if monthly else []
     select_keys.append(f"{group_col} AS grp")
@@ -142,28 +141,28 @@ def aggregate_spending(
 
     sql = f"""
         SELECT {', '.join(select_keys)},
-               round(sum(amount), 2) AS total,
+               round(sum(amount)::numeric, 2) AS total,
                count(*) AS transaction_count
         FROM transactions
         WHERE amount > 0
-          AND date >= ? AND date <= ?
+          AND date >= %s AND date <= %s
           AND coalesce(category_primary, '') NOT IN ('TRANSFER_OUT', 'LOAN_PAYMENTS')
           {pending_filter}
         GROUP BY {', '.join(group_keys)}
         ORDER BY {', '.join(group_keys)}
     """
-    conn = storage.open_readonly(db_path)
+    conn = storage.open_readonly(db_url)
     try:
-        rows = conn.execute(sql, (start_date, end_date)).fetchall()
+        rows = conn.execute(sql, (start, end)).fetchall()
     finally:
         conn.close()
 
     out = []
     for r in rows:
         if monthly:
-            out.append({"month": r[0], group_by: r[1], "total": r[2], "transaction_count": r[3]})
+            out.append({"month": r[0], group_by: r[1], "total": float(r[2]), "transaction_count": r[3]})
         else:
-            out.append({group_by: r[0], "total": r[1], "transaction_count": r[2]})
+            out.append({group_by: r[0], "total": float(r[1]), "transaction_count": r[2]})
     return {
         "start_date": start_date,
         "end_date": end_date,
@@ -171,7 +170,7 @@ def aggregate_spending(
         "monthly": monthly,
         "grand_total": round(sum(r["total"] for r in out), 2),
         "rows": out,
-        "source": "local_duckdb",
+        "source": "history_db",
     }
 
 
@@ -232,15 +231,15 @@ _TABLE_DOCS: dict[str, dict] = {
 }
 
 
-def describe_tables(db_path: str | None = None) -> dict:
+def describe_tables(db_url: str | None = None) -> dict:
     """Return the live schema of every table, annotated with usage notes."""
-    conn = storage.open_readonly(db_path)
+    conn = storage.open_readonly(db_url)
     try:
         rows = conn.execute(
             """
             SELECT table_name, column_name, data_type
             FROM information_schema.columns
-            WHERE table_schema = 'main'
+            WHERE table_schema = 'public'
             ORDER BY table_name, ordinal_position
             """
         ).fetchall()
@@ -282,7 +281,7 @@ def list_transactions(
     include_pending: bool = True,
     limit: int = 100,
     offset: int = 0,
-    db_path: str | None = None,
+    db_url: str | None = None,
 ) -> dict:
     """List raw stored transactions with filters. Never calls Plaid.
 
@@ -293,27 +292,25 @@ def list_transactions(
     where: list[str] = []
     params: list = []
     if start_date:
-        date.fromisoformat(start_date)
-        where.append("date >= ?")
-        params.append(start_date)
+        where.append("date >= %s")
+        params.append(date.fromisoformat(start_date))
     if end_date:
-        date.fromisoformat(end_date)
-        where.append("date <= ?")
-        params.append(end_date)
+        where.append("date <= %s")
+        params.append(date.fromisoformat(end_date))
     if account_id:
-        where.append("account_id = ?")
+        where.append("account_id = %s")
         params.append(account_id)
     if category:
-        where.append("upper(coalesce(category_primary, '')) = upper(?)")
+        where.append("upper(coalesce(category_primary, '')) = upper(%s)")
         params.append(category)
     if merchant_contains:
-        where.append("merchant ILIKE '%' || ? || '%'")
-        params.append(merchant_contains)
+        where.append("merchant ILIKE %s")
+        params.append(f"%{merchant_contains}%")
     if min_amount is not None:
-        where.append("amount >= ?")
+        where.append("amount >= %s")
         params.append(min_amount)
     if max_amount is not None:
-        where.append("amount <= ?")
+        where.append("amount <= %s")
         params.append(max_amount)
     if not include_pending:
         where.append("pending = FALSE")
@@ -324,14 +321,14 @@ def list_transactions(
 
     cols = ("transaction_id", "account_id", "date", "amount", "currency",
             "merchant", "name", "category_primary", "category_detailed", "pending")
-    conn = storage.open_readonly(db_path)
+    conn = storage.open_readonly(db_url)
     try:
         total = conn.execute(
             f"SELECT count(*) FROM transactions {where_sql}", params
         ).fetchone()[0]
         rows = conn.execute(
             f"SELECT {', '.join(cols)} FROM transactions {where_sql} "
-            f"ORDER BY date DESC, transaction_id LIMIT ? OFFSET ?",
+            f"ORDER BY date DESC, transaction_id LIMIT %s OFFSET %s",
             params + [limit, offset],
         ).fetchall()
     finally:
@@ -346,7 +343,7 @@ def list_transactions(
         "total_matching": total,
         "limit": limit,
         "offset": offset,
-        "source": "local_duckdb",
+        "source": "history_db",
     }
 
 
@@ -380,17 +377,26 @@ def _validate_select(sql: str) -> str:
     return stripped
 
 
-def query_finances(sql: str, db_path: str | None = None) -> dict:
-    """Run a validated read-only SELECT against the local DuckDB store.
+def _jsonable(v):
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, datetime)):
+        return str(v)
+    return v
 
-    Defense in depth: keyword validation above, plus the connection itself is
-    opened read_only so DuckDB rejects any write that slips through.
+
+def query_finances(sql: str, db_url: str | None = None) -> dict:
+    """Run a validated read-only SELECT against the Postgres history store.
+
+    Defense in depth: keyword validation above, plus the connection forces
+    default_transaction_read_only=on so Postgres rejects any write that
+    slips through.
     """
     stmt = _validate_select(sql)
-    conn = storage.open_readonly(db_path)
+    conn = storage.open_readonly(db_url)
     try:
         cur = conn.execute(stmt)
-        columns = [d[0] for d in cur.description]
+        columns = [d[0] for d in (cur.description or [])]
         rows = cur.fetchmany(_MAX_ROWS + 1)
     finally:
         conn.close()
@@ -398,7 +404,7 @@ def query_finances(sql: str, db_path: str | None = None) -> dict:
     rows = rows[:_MAX_ROWS]
     return {
         "columns": columns,
-        "rows": [[(str(v) if isinstance(v, (date,)) else v) for v in r] for r in rows],
+        "rows": [[_jsonable(v) for v in r] for r in rows],
         "row_count": len(rows),
         "truncated": truncated,
     }

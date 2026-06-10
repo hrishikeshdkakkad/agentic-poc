@@ -5,7 +5,7 @@ Used two ways:
 - ``python sync.py`` is a cron-able CLI entrypoint (no daemon)
 
 Pages from /transactions/sync are accumulated in memory and written together
-with the new cursor in one DuckDB transaction (see storage.apply_transactions_sync),
+with the new cursor in one database transaction (see storage.apply_transactions_sync),
 so an interrupted run resumes from the last durable cursor and re-runs are
 idempotent. TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION restarts pagination
 from that cursor, per Plaid's documented contract.
@@ -123,7 +123,7 @@ def snapshot_item(api, conn, env_key: str, token: SecretStr, health: ItemHealth)
     return counts, warnings
 
 
-def run_sync(api=None, db_path: str | None = None) -> dict:
+def run_sync(api=None, db_url: str | None = None) -> dict:
     """Sync transactions and record snapshots for every healthy Item.
 
     Returns per-item results plus warnings for unhealthy Items or API errors.
@@ -131,7 +131,7 @@ def run_sync(api=None, db_path: str | None = None) -> dict:
     snapshots by (date, account, ...), so duplicates cannot accumulate.
     """
     api = api or build_api()
-    conn = storage.open_db(db_path)
+    conn = storage.open_db(db_url)
     items_out: list[dict] = []
     warnings: list[dict] = []
     try:

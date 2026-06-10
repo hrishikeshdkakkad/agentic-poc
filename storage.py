@@ -1,9 +1,11 @@
-"""DuckDB storage layer for transaction history and snapshots.
+"""Postgres storage layer for transaction history and snapshots (Neon-ready).
 
-All writes go through a single read-write connection per call; query tools
-use a separate read-only connection (see ``open_readonly``). The DB file
-location defaults to ./data/finance.duckdb and can be overridden with the
-FINANCE_DB_PATH env var.
+Set DATABASE_URL to any Postgres connection string — for Neon:
+    postgresql://USER:PASSWORD@ep-xxx-xxx.aws.neon.tech/finance?sslmode=require
+
+Writes use short-lived connections opened per call; query tools use a
+read-only connection (``open_readonly``) whose transactions are forced
+read-only server-side.
 
 Plaid sign convention is preserved as-is: transaction ``amount`` is positive
 for outflows (spending) and negative for inflows.
@@ -13,13 +15,17 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timezone
 
-import duckdb
-
-DEFAULT_DB_PATH = os.path.join("data", "finance.duckdb")
+import psycopg
 
 
-def db_path() -> str:
-    return os.environ.get("FINANCE_DB_PATH", DEFAULT_DB_PATH)
+def database_url() -> str:
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Point it at your Postgres database, "
+            "e.g. a Neon connection string ending in ?sslmode=require"
+        )
+    return url
 
 
 _SCHEMA = """
@@ -33,7 +39,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     type TEXT,
     subtype TEXT,
     currency TEXT,
-    updated_at TIMESTAMP
+    updated_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -42,58 +48,60 @@ CREATE TABLE IF NOT EXISTS transactions (
     item_key TEXT,
     date DATE,
     authorized_date DATE,
-    amount DOUBLE,
+    amount DOUBLE PRECISION,
     currency TEXT,
     merchant TEXT,
     name TEXT,
     category_primary TEXT,
     category_detailed TEXT,
     pending BOOLEAN,
-    updated_at TIMESTAMP
+    updated_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (date);
+CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions (category_primary);
 
 CREATE TABLE IF NOT EXISTS balance_snapshots (
     snapshot_date DATE,
-    snapshot_ts TIMESTAMP,
+    snapshot_ts TIMESTAMPTZ,
     account_id TEXT,
     item_key TEXT,
     institution TEXT,
     type TEXT,
     subtype TEXT,
-    current DOUBLE,
-    available DOUBLE,
-    credit_limit DOUBLE,
+    current DOUBLE PRECISION,
+    available DOUBLE PRECISION,
+    credit_limit DOUBLE PRECISION,
     currency TEXT,
     PRIMARY KEY (snapshot_date, account_id)
 );
 
 CREATE TABLE IF NOT EXISTS holdings_snapshots (
     snapshot_date DATE,
-    snapshot_ts TIMESTAMP,
+    snapshot_ts TIMESTAMPTZ,
     account_id TEXT,
     item_key TEXT,
     security_id TEXT,
     symbol TEXT,
     security_name TEXT,
     security_type TEXT,
-    quantity DOUBLE,
-    price DOUBLE,
-    market_value DOUBLE,
-    cost_basis DOUBLE,
+    quantity DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    market_value DOUBLE PRECISION,
+    cost_basis DOUBLE PRECISION,
     currency TEXT,
     PRIMARY KEY (snapshot_date, account_id, security_id)
 );
 
 CREATE TABLE IF NOT EXISTS liabilities_snapshots (
     snapshot_date DATE,
-    snapshot_ts TIMESTAMP,
+    snapshot_ts TIMESTAMPTZ,
     account_id TEXT,
     item_key TEXT,
     liability_type TEXT,
-    outstanding_balance DOUBLE,
-    apr_percentage DOUBLE,
-    interest_rate_percentage DOUBLE,
-    minimum_payment_amount DOUBLE,
+    outstanding_balance DOUBLE PRECISION,
+    apr_percentage DOUBLE PRECISION,
+    interest_rate_percentage DOUBLE PRECISION,
+    minimum_payment_amount DOUBLE PRECISION,
     next_payment_due_date DATE,
     is_overdue BOOLEAN,
     currency TEXT,
@@ -103,40 +111,41 @@ CREATE TABLE IF NOT EXISTS liabilities_snapshots (
 CREATE TABLE IF NOT EXISTS sync_state (
     item_key TEXT PRIMARY KEY,
     cursor TEXT,
-    last_synced_at TIMESTAMP,
+    last_synced_at TIMESTAMPTZ,
     tx_added BIGINT DEFAULT 0,
     tx_modified BIGINT DEFAULT 0,
     tx_removed BIGINT DEFAULT 0
 );
 """
 
+_schema_ensured: set[str] = set()
 
-def open_db(path: str | None = None) -> duckdb.DuckDBPyConnection:
-    """Open (creating if needed) the finance DB and ensure the schema exists."""
-    p = path or db_path()
-    parent = os.path.dirname(p)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    conn = duckdb.connect(p)
-    conn.execute(_SCHEMA)
+
+def open_db(url: str | None = None) -> psycopg.Connection:
+    """Open a read-write connection, creating the schema on first use."""
+    u = url or database_url()
+    conn = psycopg.connect(u, autocommit=True)
+    if u not in _schema_ensured:
+        conn.execute(_SCHEMA)
+        _schema_ensured.add(u)
     return conn
 
 
-def open_readonly(path: str | None = None) -> duckdb.DuckDBPyConnection:
-    """Open a read-only connection for query tools. The DB must exist."""
-    p = path or db_path()
-    if not os.path.exists(p):
-        # Create the schema first so read-only queries against a fresh
-        # install see empty tables instead of a missing-file error.
-        open_db(p).close()
-    return duckdb.connect(p, read_only=True)
+def open_readonly(url: str | None = None) -> psycopg.Connection:
+    """Open a connection whose transactions are read-only server-side."""
+    u = url or database_url()
+    if u not in _schema_ensured:
+        open_db(u).close()
+    return psycopg.connect(
+        u, autocommit=True, options="-c default_transaction_read_only=on"
+    )
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def upsert_accounts(conn: duckdb.DuckDBPyConnection, item_key: str,
+def upsert_accounts(conn: psycopg.Connection, item_key: str,
                     institution: str | None, raw_accounts: list[dict]) -> int:
     rows = [
         (
@@ -155,8 +164,21 @@ def upsert_accounts(conn: duckdb.DuckDBPyConnection, item_key: str,
         if a.get("account_id")
     ]
     if rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO accounts VALUES (?,?,?,?,?,?,?,?,?,?)", rows
+        conn.cursor().executemany(
+            """
+            INSERT INTO accounts VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (account_id) DO UPDATE SET
+                item_key = EXCLUDED.item_key,
+                institution = EXCLUDED.institution,
+                name = EXCLUDED.name,
+                official_name = EXCLUDED.official_name,
+                mask = EXCLUDED.mask,
+                type = EXCLUDED.type,
+                subtype = EXCLUDED.subtype,
+                currency = EXCLUDED.currency,
+                updated_at = EXCLUDED.updated_at
+            """,
+            rows,
         )
     return len(rows)
 
@@ -182,8 +204,26 @@ def _tx_row(raw: dict, item_key: str) -> tuple:
     )
 
 
+_TX_UPSERT = """
+INSERT INTO transactions VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+ON CONFLICT (transaction_id) DO UPDATE SET
+    account_id = EXCLUDED.account_id,
+    item_key = EXCLUDED.item_key,
+    date = EXCLUDED.date,
+    authorized_date = EXCLUDED.authorized_date,
+    amount = EXCLUDED.amount,
+    currency = EXCLUDED.currency,
+    merchant = EXCLUDED.merchant,
+    name = EXCLUDED.name,
+    category_primary = EXCLUDED.category_primary,
+    category_detailed = EXCLUDED.category_detailed,
+    pending = EXCLUDED.pending,
+    updated_at = EXCLUDED.updated_at
+"""
+
+
 def apply_transactions_sync(
-    conn: duckdb.DuckDBPyConnection,
+    conn: psycopg.Connection,
     item_key: str,
     added: list[dict],
     modified: list[dict],
@@ -193,7 +233,7 @@ def apply_transactions_sync(
     """Apply one completed /transactions/sync pass atomically.
 
     Upserts added+modified by transaction_id, deletes removed, and persists
-    the cursor — all in one DuckDB transaction so a crash never leaves the
+    the cursor — all in one Postgres transaction so a crash never leaves the
     cursor ahead of the data. Re-running with the same payload is a no-op.
     """
     upserts = [
@@ -201,47 +241,40 @@ def apply_transactions_sync(
         for t in list(added) + list(modified)
         if t.get("transaction_id")
     ]
-    conn.execute("BEGIN TRANSACTION")
-    try:
+    with conn.transaction():
+        cur = conn.cursor()
         if upserts:
-            conn.executemany(
-                "INSERT OR REPLACE INTO transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                upserts,
-            )
+            cur.executemany(_TX_UPSERT, upserts)
         if removed:
-            conn.executemany(
-                "DELETE FROM transactions WHERE transaction_id = ?",
+            cur.executemany(
+                "DELETE FROM transactions WHERE transaction_id = %s",
                 [(tid,) for tid in removed],
             )
-        conn.execute(
+        cur.execute(
             """
             INSERT INTO sync_state (item_key, cursor, last_synced_at, tx_added, tx_modified, tx_removed)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (item_key) DO UPDATE SET
-                cursor = excluded.cursor,
-                last_synced_at = excluded.last_synced_at,
-                tx_added = sync_state.tx_added + excluded.tx_added,
-                tx_modified = sync_state.tx_modified + excluded.tx_modified,
-                tx_removed = sync_state.tx_removed + excluded.tx_removed
+                cursor = EXCLUDED.cursor,
+                last_synced_at = EXCLUDED.last_synced_at,
+                tx_added = sync_state.tx_added + EXCLUDED.tx_added,
+                tx_modified = sync_state.tx_modified + EXCLUDED.tx_modified,
+                tx_removed = sync_state.tx_removed + EXCLUDED.tx_removed
             """,
             (item_key, cursor, _now(), len(added), len(modified), len(removed)),
         )
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
     return {"added": len(added), "modified": len(modified), "removed": len(removed)}
 
 
-def get_cursor(conn: duckdb.DuckDBPyConnection, item_key: str) -> str | None:
+def get_cursor(conn: psycopg.Connection, item_key: str) -> str | None:
     row = conn.execute(
-        "SELECT cursor FROM sync_state WHERE item_key = ?", (item_key,)
+        "SELECT cursor FROM sync_state WHERE item_key = %s", (item_key,)
     ).fetchone()
     return row[0] if row else None
 
 
 def record_balance_snapshots(
-    conn: duckdb.DuckDBPyConnection,
+    conn: psycopg.Connection,
     item_key: str,
     institution: str | None,
     raw_accounts: list[dict],
@@ -262,15 +295,27 @@ def record_balance_snapshots(
             bals.get("iso_currency_code"),
         ))
     if rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO balance_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        conn.cursor().executemany(
+            """
+            INSERT INTO balance_snapshots VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (snapshot_date, account_id) DO UPDATE SET
+                snapshot_ts = EXCLUDED.snapshot_ts,
+                item_key = EXCLUDED.item_key,
+                institution = EXCLUDED.institution,
+                type = EXCLUDED.type,
+                subtype = EXCLUDED.subtype,
+                current = EXCLUDED.current,
+                available = EXCLUDED.available,
+                credit_limit = EXCLUDED.credit_limit,
+                currency = EXCLUDED.currency
+            """,
             rows,
         )
     return len(rows)
 
 
 def record_holdings_snapshots(
-    conn: duckdb.DuckDBPyConnection,
+    conn: psycopg.Connection,
     item_key: str,
     raw_holdings: list[dict],
     securities_by_id: dict[str, dict],
@@ -292,15 +337,28 @@ def record_holdings_snapshots(
             h.get("iso_currency_code"),
         ))
     if rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO holdings_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        conn.cursor().executemany(
+            """
+            INSERT INTO holdings_snapshots VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (snapshot_date, account_id, security_id) DO UPDATE SET
+                snapshot_ts = EXCLUDED.snapshot_ts,
+                item_key = EXCLUDED.item_key,
+                symbol = EXCLUDED.symbol,
+                security_name = EXCLUDED.security_name,
+                security_type = EXCLUDED.security_type,
+                quantity = EXCLUDED.quantity,
+                price = EXCLUDED.price,
+                market_value = EXCLUDED.market_value,
+                cost_basis = EXCLUDED.cost_basis,
+                currency = EXCLUDED.currency
+            """,
             rows,
         )
     return len(rows)
 
 
 def record_liabilities_snapshots(
-    conn: duckdb.DuckDBPyConnection,
+    conn: psycopg.Connection,
     item_key: str,
     liabilities: dict,
     balances_by_account: dict[str, dict],
@@ -357,8 +415,20 @@ def record_liabilities_snapshots(
             None, currency,
         ))
     if rows:
-        conn.executemany(
-            "INSERT OR REPLACE INTO liabilities_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        conn.cursor().executemany(
+            """
+            INSERT INTO liabilities_snapshots VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (snapshot_date, account_id, liability_type) DO UPDATE SET
+                snapshot_ts = EXCLUDED.snapshot_ts,
+                item_key = EXCLUDED.item_key,
+                outstanding_balance = EXCLUDED.outstanding_balance,
+                apr_percentage = EXCLUDED.apr_percentage,
+                interest_rate_percentage = EXCLUDED.interest_rate_percentage,
+                minimum_payment_amount = EXCLUDED.minimum_payment_amount,
+                next_payment_due_date = EXCLUDED.next_payment_due_date,
+                is_overdue = EXCLUDED.is_overdue,
+                currency = EXCLUDED.currency
+            """,
             rows,
         )
     return len(rows)
