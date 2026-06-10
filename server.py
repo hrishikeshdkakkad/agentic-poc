@@ -782,6 +782,219 @@ get_optimizer_score = mcp.tool(
 )(_get_optimizer_score_impl)
 
 
+# ---------------------------------------------------------------------------
+# Deep-insight tools (wealth.py / insights.py) — zero Plaid calls, answer
+# from the local history store so agents can call them liberally.
+# ---------------------------------------------------------------------------
+
+import insights  # noqa: E402
+import wealth  # noqa: E402
+
+
+def _get_debt_analysis_impl(monthly_payment: float | None = None) -> dict:
+    """What every carried debt actually costs, with concrete payoff plans.
+
+    Per debt: balance, APR, credit utilization, minimum payment, due date,
+    and monthly_interest_if_carried — the real dollar cost of revolving.
+    payoff_scenarios amortizes the balance at the minimum payment, a few
+    standard levels, and the optional monthly_payment you pass, each with
+    months-to-zero and total interest (or an explicit "never pays off").
+    Aggregates: total debt, balance-weighted APR, total monthly interest.
+    """
+    return wealth.get_debt_analysis(monthly_payment=monthly_payment)
+
+
+get_debt_analysis = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Debt Analysis"},
+    name="get_debt_analysis",
+)(_get_debt_analysis_impl)
+
+
+def _get_portfolio_analysis_impl() -> dict:
+    """Portfolio at the latest holdings snapshot, aggregated by symbol.
+
+    Positions with weight, unrealized gain where cost basis is known (never
+    invented — basis_known flags partial data, basis_coverage_pct says how
+    much of the portfolio the gain figures cover), a cash-like vs invested
+    split (T-bill ETFs like BIL/SGOV count as parked cash, not bets),
+    allocation by security type, and concentration (top position / top 5).
+    """
+    return wealth.get_portfolio_analysis()
+
+
+get_portfolio_analysis = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Portfolio Analysis"},
+    name="get_portfolio_analysis",
+)(_get_portfolio_analysis_impl)
+
+
+def _get_income_analysis_impl(months: int = 6) -> dict:
+    """Inflows classified into typed buckets, with savings rate.
+
+    Plaid's INCOME category is unreliable (vault transfers and refunds land
+    there), so every inflow is classified by pattern: payroll, interest,
+    tax_refund, other_income count as income; p2p, self_transfer,
+    card_payment, refund are reported but never counted as income. Monthly
+    series flags the in-progress month partial; averages and savings_rate
+    use completed months only. Read caveats — ambiguous money is yours to
+    interpret, and overrides can reclassify it.
+    """
+    return wealth.get_income_analysis(months=months)
+
+
+get_income_analysis = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Income Analysis"},
+    name="get_income_analysis",
+)(_get_income_analysis_impl)
+
+
+def _get_net_worth_trajectory_impl(milestone: float = 100000.0,
+                                   months: int = 6) -> dict:
+    """Where net worth is heading and when it crosses the milestone.
+
+    Two independent monthly-change estimates: snapshot growth (used once
+    snapshots span 21+ days) and average monthly net cashflow from
+    transactions (works from day one; transfers between own accounts net
+    out). Returns both, the chosen estimate_source, per-month net flows,
+    and a milestone block with months_away and an ETA date.
+    """
+    return wealth.get_net_worth_trajectory(milestone=milestone, months=months)
+
+
+get_net_worth_trajectory = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Net Worth Trajectory"},
+    name="get_net_worth_trajectory",
+)(_get_net_worth_trajectory_impl)
+
+
+def _get_recurring_analysis_impl(months: int = 6) -> dict:
+    """Recurring expense streams detected locally from charge cadence.
+
+    Unlike Plaid's recurring API this is built from the full local history,
+    so each stream carries price evolution: price_change flags creep (latest
+    vs prior median beyond 5%), is_fixed_amount separates true bills from
+    habitual merchants, and annualized_cost / monthly_equivalent make
+    subscriptions comparable. Includes next_expected_date per stream and a
+    price_increases shortlist. Card payments and transfers are excluded.
+    """
+    return insights.get_recurring_analysis(months=months)
+
+
+get_recurring_analysis = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Recurring & Subscriptions"},
+    name="get_recurring_analysis",
+)(_get_recurring_analysis_impl)
+
+
+def _get_merchant_profile_impl(merchant: str) -> dict:
+    """The lifetime story of one merchant: total given, frequency, trend.
+
+    Case-insensitive substring search over BOTH the cleaned merchant and the
+    raw transaction name — so "doordash" finds orders Plaid filed under the
+    restaurant's name. Returns lifetime totals, refunds, average/max ticket,
+    first/last seen, a monthly series, a trend vs prior months, tags, and
+    the most recent transactions.
+    """
+    return insights.get_merchant_profile(merchant)
+
+
+get_merchant_profile = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Merchant Profile"},
+    name="get_merchant_profile",
+)(_get_merchant_profile_impl)
+
+
+def _compare_periods_impl(period_a: str, period_b: str) -> dict:
+    """Diff two months of spending and name what drove the change.
+
+    Periods are YYYY-MM. Returns totals and delta, plus by_category and
+    by_merchant rows (a, b, delta) sorted by absolute delta so the biggest
+    movers lead. Transfers and loan payments are excluded, pending too.
+    """
+    try:
+        return insights.compare_periods(period_a, period_b)
+    except ValueError as e:
+        return {"error": {"code": "INVALID_PERIOD", "message": str(e)}}
+
+
+compare_periods = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Compare Periods"},
+    name="compare_periods",
+)(_compare_periods_impl)
+
+
+def _get_financial_health_impl() -> dict:
+    """One-call orientation across the whole financial picture.
+
+    Net worth, liquid reserves (bank cash + cash-like brokerage positions),
+    months of runway, debt cost, income vs expenses with savings rate,
+    Optimizer-game pace, and net-worth trajectory — plus rule-based flags
+    (high_utilization, expensive_debt, thin_runway, negative/low savings,
+    unknown_cost_basis, over_pace) for what deserves attention. Start here
+    when forming an overall view, then drill into the dedicated tools.
+    """
+    return insights.get_financial_health()
+
+
+get_financial_health = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Financial Health"},
+    name="get_financial_health",
+)(_get_financial_health_impl)
+
+
+def _set_category_override_impl(match_type: str, match_value: str,
+                                set_primary: str | None = None,
+                                set_detailed: str | None = None,
+                                note: str | None = None) -> dict:
+    """Durably correct a transaction category — the fix survives re-syncs.
+
+    match_type 'merchant' rewrites every transaction whose merchant+name
+    contains match_value (case-insensitive); 'transaction' targets one
+    transaction_id. set_primary/set_detailed write category_primary/
+    category_detailed (NULL leaves a field unchanged). The override is
+    stored as a rule and re-applied after every sync and import, so use it
+    to permanently fix provider miscategorization (e.g. a photographer
+    filed as FOOD_AND_DRINK → WEDDING). Applied to existing rows
+    immediately; include a note saying why.
+    """
+    try:
+        storage.add_override(match_type, match_value, set_primary=set_primary,
+                             set_detailed=set_detailed, note=note)
+    except ValueError as e:
+        return {"error": {"code": "INVALID_OVERRIDE", "message": str(e)}}
+    conn = storage.open_db()
+    try:
+        touched = storage.apply_overrides(conn)
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        "match_type": match_type,
+        "match_value": match_value.lower().strip(),
+        "set_primary": set_primary,
+        "set_detailed": set_detailed,
+        "applied_to_transactions": touched,
+    }
+
+
+set_category_override = mcp.tool(
+    annotations={"title": "Set Category Override"},
+    name="set_category_override",
+)(_set_category_override_impl)
+
+
+def _list_category_overrides_impl() -> dict:
+    """List the category-correction rulebook (see set_category_override)."""
+    overrides = storage.list_overrides()
+    return {"overrides": overrides, "count": len(overrides)}
+
+
+list_category_overrides = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "List Category Overrides"},
+    name="list_category_overrides",
+)(_list_category_overrides_impl)
+
+
 if __name__ == "__main__":
     mcp.run(
         transport="http",

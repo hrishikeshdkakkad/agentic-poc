@@ -353,12 +353,23 @@ def list_transactions(
             f"ORDER BY date DESC, transaction_id LIMIT %s OFFSET %s",
             params + [limit, offset],
         ).fetchall()
+        tag_rows = []
+        if rows:
+            tag_rows = conn.execute(
+                "SELECT transaction_id, tag FROM transaction_tags "
+                "WHERE transaction_id = ANY(%s) ORDER BY tag",
+                ([r[0] for r in rows],),
+            ).fetchall()
     finally:
         conn.close()
+    tags_by_id: dict[str, list[str]] = {}
+    for tid, tag in tag_rows:
+        tags_by_id.setdefault(tid, []).append(tag)
     out = []
     for r in rows:
         d = dict(zip(cols, r))
         d["date"] = str(d["date"]) if d["date"] else None
+        d["tags"] = tags_by_id.get(d["transaction_id"], [])
         out.append(d)
     return {
         "transactions": out,

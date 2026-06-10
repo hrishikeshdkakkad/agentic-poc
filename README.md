@@ -61,6 +61,24 @@ python sync.py                       # cron-able CLI; same effect as the sync_no
 | `describe_tables`       | Local schema with column notes and conventions — call before writing SQL               |
 | `list_transactions`     | Raw stored transactions with filters (dates, category, merchant, amount) + paging — zero Plaid calls |
 | `get_sync_status`       | Store freshness, table counts, and the Plaid-API call counter                          |
+| `get_optimizer_score`   | The Optimizer game: month-to-date spend vs the hard monthly target, points, records    |
+
+### Deep-insight tools (Postgres-backed, this fork)
+
+All zero Plaid calls — agents can call these liberally.
+
+| Tool                       | What it does                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `get_debt_analysis`        | Per-debt APR, utilization, monthly carrying cost, and payoff scenarios (months + interest) |
+| `get_portfolio_analysis`   | Positions by symbol: weights, null-safe unrealized gains, cash-like vs invested, concentration |
+| `get_income_analysis`      | Inflows classified into typed buckets (payroll/interest/p2p/transfers/…), savings rate     |
+| `get_net_worth_trajectory` | Monthly net-worth change (snapshots or cashflow) with milestone ETA                        |
+| `get_recurring_analysis`   | Locally-detected recurring streams with price history and creep flags                      |
+| `get_merchant_profile`     | Lifetime story of one merchant (searches raw names too), trend + monthly series            |
+| `compare_periods`          | Month-vs-month diff with category and merchant drivers, biggest movers first               |
+| `get_financial_health`     | One-call orientation: net worth, runway, debt cost, savings rate, pace + attention flags   |
+| `set_category_override`    | Durably fix a miscategorized merchant/transaction; reapplied after every sync              |
+| `list_category_overrides`  | Show the category-correction rulebook                                                      |
 
 ### Original live tools
 

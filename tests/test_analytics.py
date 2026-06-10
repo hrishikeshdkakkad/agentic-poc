@@ -230,3 +230,46 @@ def test_get_sync_status_reports_counts_and_counter(seeded_db):
     assert out["table_counts"]["transactions"] == 8
     assert out["table_counts"]["balance_snapshots"] == 6
     assert isinstance(out["plaid_calls_this_session"], int)
+
+
+def test_list_transactions_includes_tags(seeded_db):
+    seeded_db.execute(
+        "INSERT INTO transaction_tags (transaction_id, tag, source) "
+        "VALUES ('t1', 'delivery', 'rule')")
+    out = analytics.list_transactions(merchant_contains="Starbucks")
+    by_id = {t["transaction_id"]: t for t in out["transactions"]}
+    assert by_id["t1"]["tags"] == ["delivery"]
+    assert by_id["t4"]["tags"] == []
+
+
+def test_new_insight_and_override_tools_registered():
+    tools = asyncio.run(srv.mcp.list_tools())
+    names = {getattr(t, "name", None) for t in tools}
+    assert {
+        "get_debt_analysis", "get_portfolio_analysis", "get_income_analysis",
+        "get_net_worth_trajectory", "get_recurring_analysis",
+        "get_merchant_profile", "compare_periods", "get_financial_health",
+        "set_category_override", "list_category_overrides",
+    } <= names
+
+
+def test_set_category_override_tool_applies_immediately(db):
+    db.execute(
+        "INSERT INTO transactions VALUES ('p1','acc','CHASE','2026-05-01',"
+        "'2026-05-01',825.0,'USD','Stephanie Hopkins Pho',"
+        "'STEPHANIE HOPKINS PHO','FOOD_AND_DRINK',NULL,FALSE,now())")
+    out = srv._set_category_override_impl(
+        "merchant", "stephanie hopkins", set_primary="WEDDING",
+        note="proposal photographer, not a restaurant")
+    assert out["applied_to_transactions"] == 1
+    assert db.execute(
+        "SELECT category_primary FROM transactions WHERE transaction_id='p1'"
+    ).fetchone()[0] == "WEDDING"
+    lst = srv._list_category_overrides_impl()
+    assert lst["overrides"][0]["match_value"] == "stephanie hopkins"
+    assert lst["count"] == 1
+
+
+def test_set_category_override_rejects_bad_match_type(db):
+    out = srv._set_category_override_impl("category", "food", set_primary="X")
+    assert out["error"]["code"] == "INVALID_OVERRIDE"
