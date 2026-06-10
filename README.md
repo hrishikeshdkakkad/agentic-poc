@@ -150,7 +150,7 @@ For a deployment you can use from anywhere:
 
 - **Single-tenant.** One deployment per person. Don't share.
 - **Read-only.** No tool mutates state at any institution. Don't add any that do. `sync_now` writes only to your own history database.
-- **Tokens encrypted at rest.** Access tokens live in a Fernet-encrypted store (`~/.config/personal-finance-mcp/tokens.enc`, keyfile chmod 600, outside the repo). Manage with `python secure_tokens.py list|add|remove|import`. `PLAID_TOKEN_*` env vars still work and override the store. Tokens are never logged or printed (`SecretStr` redaction everywhere).
+- **Tokens encrypted at rest, stored in the database.** Access tokens are Fernet-encrypted client-side and the ciphertext lives in the `plaid_tokens` table, so the server can run anywhere that reaches Postgres. The Fernet key never touches the database: it comes from `FERNET_KEY` (deployments) or a chmod-600 keyfile in `~/.config/personal-finance-mcp/`. DB access alone reveals nothing; the key alone reveals nothing. `plaid_tokens` is blocked from `query_finances`/`describe_tables`. Manage with `python secure_tokens.py list|add|remove|import`; `PLAID_TOKEN_*` env vars still override. Tokens are never logged or printed (`SecretStr` redaction everywhere).
 - **You own the history database.** Data lives in your own Postgres (e.g. a Neon project under your account). Use a dedicated database, keep `sslmode=require` in `DATABASE_URL`, and don't share the connection string — it grants read/write to your full transaction history.
 - **You own Plaid compliance.** You're the Plaid customer under your own account.
 

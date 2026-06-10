@@ -247,6 +247,8 @@ def describe_tables(db_url: str | None = None) -> dict:
         conn.close()
     tables: dict[str, dict] = {}
     for table_name, column_name, data_type in rows:
+        if table_name == "plaid_tokens":  # encrypted credentials — not agent-facing
+            continue
         doc = _TABLE_DOCS.get(table_name, {})
         entry = tables.setdefault(table_name, {
             "description": doc.get("description"),
@@ -374,6 +376,8 @@ def _validate_select(sql: str) -> str:
     banned = _BANNED_TOKENS.search(stripped)
     if banned:
         raise ValueError(f"keyword not allowed in read-only queries: {banned.group(0)}")
+    if re.search(r"\bplaid_tokens\b", stripped, re.IGNORECASE):
+        raise ValueError("plaid_tokens holds encrypted credentials and is not queryable")
     return stripped
 
 

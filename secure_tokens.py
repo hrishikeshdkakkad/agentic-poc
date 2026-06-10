@@ -1,13 +1,22 @@
-"""Encrypted-at-rest storage for Plaid access tokens (Fernet).
+"""Encrypted-at-rest storage for Plaid access tokens, persisted in Postgres.
 
-Layout (outside the repo by default, override with PFM_SECRETS_DIR):
-    ~/.config/personal-finance-mcp/
-        fernet.key   chmod 600 — symmetric key, generated on first use
-        tokens.enc   chmod 600 — Fernet-encrypted JSON {ENV_KEY: access_token}
+Tokens are Fernet-encrypted *client-side* and the ciphertext is stored in
+the ``plaid_tokens`` table (so the server can run anywhere that reaches the
+database). The Fernet key never touches the database:
 
-Token values are never logged or printed; CLI output shows key names only.
-Environment variables (PLAID_TOKEN_*) still work and override the store,
-so PLAID_ENV/production swaps stay pure env changes.
+    key resolution order:
+      1. FERNET_KEY env var (for deployments — a base64 Fernet key)
+      2. keyfile at $PFM_SECRETS_DIR/fernet.key, chmod 600, generated on
+         first use (default dir: ~/.config/personal-finance-mcp, chmod 700)
+
+Someone holding only the DATABASE_URL sees ciphertext; someone holding only
+the key sees nothing. Token values are never logged or printed; CLI output
+shows key names only. PLAID_TOKEN_* env vars still work and override the
+store (see plaid_client.load_tokens).
+
+A legacy file store ($PFM_SECRETS_DIR/tokens.enc, from the pre-Postgres
+layout) is migrated into the database automatically on first load and
+renamed to tokens.enc.migrated.
 
 CLI:
     python secure_tokens.py list
@@ -25,7 +34,7 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 
 _KEY_FILE = "fernet.key"
-_TOKENS_FILE = "tokens.enc"
+_LEGACY_TOKENS_FILE = "tokens.enc"
 
 
 def secrets_dir() -> str:
@@ -52,6 +61,9 @@ def _write_private(path: str, data: bytes) -> None:
 
 
 def _get_fernet() -> Fernet:
+    env_key = os.environ.get("FERNET_KEY")
+    if env_key:
+        return Fernet(env_key.strip().encode())
     d = _ensure_dir()
     key_path = os.path.join(d, _KEY_FILE)
     if not os.path.exists(key_path):
@@ -60,71 +72,120 @@ def _get_fernet() -> Fernet:
         return Fernet(f.read().strip())
 
 
-def load_encrypted_tokens() -> dict[str, str]:
-    """Decrypt and return {ENV_KEY: token}. Missing store -> empty dict."""
-    path = os.path.join(secrets_dir(), _TOKENS_FILE)
+def _decrypt(f: Fernet, ciphertext: str, context: str) -> str:
+    try:
+        return f.decrypt(ciphertext.encode()).decode()
+    except InvalidToken as e:
+        raise RuntimeError(
+            f"stored token for {context} cannot be decrypted with the current "
+            "Fernet key; fix the key (FERNET_KEY / fernet.key) or remove the row"
+        ) from e
+
+
+def _migrate_legacy_file(conn, f: Fernet) -> None:
+    """One-time import of the old file-based store into plaid_tokens."""
+    path = os.path.join(secrets_dir(), _LEGACY_TOKENS_FILE)
     if not os.path.exists(path):
-        return {}
-    f = _get_fernet()
+        return
     with open(path, "rb") as fh:
         blob = fh.read()
     try:
-        decrypted = f.decrypt(blob)
+        data = json.loads(f.decrypt(blob))
     except InvalidToken as e:
         raise RuntimeError(
-            "token store cannot be decrypted with the current key "
-            f"({path}); fix or remove the store"
+            f"legacy token store {path} cannot be decrypted with the current key; "
+            "fix or remove it"
         ) from e
-    data = json.loads(decrypted)
-    return {str(k): str(v) for k, v in data.items()}
+    for key, value in data.items():
+        _upsert(conn, str(key), f.encrypt(str(value).encode()).decode())
+    os.rename(path, path + ".migrated")
 
 
-def save_tokens(tokens: dict[str, str]) -> None:
+def _upsert(conn, env_key: str, ciphertext: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO plaid_tokens (env_key, token_ciphertext)
+        VALUES (%s, %s)
+        ON CONFLICT (env_key) DO UPDATE SET
+            token_ciphertext = EXCLUDED.token_ciphertext,
+            updated_at = now()
+        """,
+        (env_key, ciphertext),
+    )
+
+
+def _norm(env_key: str) -> str:
+    return env_key.upper().removeprefix("PLAID_TOKEN_")
+
+
+def load_encrypted_tokens() -> dict[str, str]:
+    """Decrypt and return {ENV_KEY: token} from the plaid_tokens table."""
+    import storage
     f = _get_fernet()
-    path = os.path.join(_ensure_dir(), _TOKENS_FILE)
-    _write_private(path, f.encrypt(json.dumps(tokens).encode()))
+    conn = storage.open_db()
+    try:
+        _migrate_legacy_file(conn, f)
+        rows = conn.execute(
+            "SELECT env_key, token_ciphertext FROM plaid_tokens ORDER BY env_key"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {k: _decrypt(f, ct, k) for k, ct in rows}
 
 
 def set_token(env_key: str, token: str) -> None:
     """Add or replace one token. env_key is the bare suffix, e.g. 'CHASE'."""
-    key = env_key.upper().removeprefix("PLAID_TOKEN_")
-    tokens = load_encrypted_tokens()
-    tokens[key] = token
-    save_tokens(tokens)
+    import storage
+    f = _get_fernet()
+    conn = storage.open_db()
+    try:
+        _upsert(conn, _norm(env_key), f.encrypt(token.encode()).decode())
+    finally:
+        conn.close()
 
 
 def remove_token(env_key: str) -> bool:
-    key = env_key.upper().removeprefix("PLAID_TOKEN_")
-    tokens = load_encrypted_tokens()
-    if key not in tokens:
-        return False
-    del tokens[key]
-    save_tokens(tokens)
-    return True
+    import storage
+    conn = storage.open_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM plaid_tokens WHERE env_key = %s", (_norm(env_key),)
+        )
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def import_from_env() -> list[str]:
     """Copy PLAID_TOKEN_* env vars into the encrypted store. Returns key names."""
+    import storage
     prefix = "PLAID_TOKEN_"
-    tokens = load_encrypted_tokens()
+    f = _get_fernet()
     imported = []
-    for key, value in os.environ.items():
-        if key.startswith(prefix) and value:
-            tokens[key[len(prefix):]] = value
-            imported.append(key[len(prefix):])
-    if imported:
-        save_tokens(tokens)
+    conn = storage.open_db()
+    try:
+        for key, value in os.environ.items():
+            if key.startswith(prefix) and value:
+                _upsert(conn, key[len(prefix):], f.encrypt(value.encode()).decode())
+                imported.append(key[len(prefix):])
+    finally:
+        conn.close()
     return imported
 
 
 def main(argv: list[str]) -> int:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
     if len(argv) < 1 or argv[0] not in ("list", "add", "remove", "import"):
         print(__doc__, file=sys.stderr)
         return 2
     cmd = argv[0]
     if cmd == "list":
         keys = sorted(load_encrypted_tokens())
-        print(json.dumps({"keys": keys, "store": os.path.join(secrets_dir(), _TOKENS_FILE)}))
+        print(json.dumps({"keys": keys, "store": "plaid_tokens table"}))
     elif cmd == "add":
         if len(argv) < 2:
             print("usage: secure_tokens.py add <KEY>  (token on stdin)", file=sys.stderr)
@@ -134,7 +195,7 @@ def main(argv: list[str]) -> int:
             print("no token on stdin", file=sys.stderr)
             return 2
         set_token(argv[1], token)
-        print(f"stored token for {argv[1].upper().removeprefix('PLAID_TOKEN_')}")
+        print(f"stored token for {_norm(argv[1])}")
     elif cmd == "remove":
         if len(argv) < 2:
             print("usage: secure_tokens.py remove <KEY>", file=sys.stderr)

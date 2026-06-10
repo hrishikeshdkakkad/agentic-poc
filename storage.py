@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
     tx_modified BIGINT DEFAULT 0,
     tx_removed BIGINT DEFAULT 0
 );
+
+-- Plaid access tokens, Fernet-encrypted client-side before insert.
+-- The Fernet key never touches the database (see secure_tokens.py), so the
+-- connection string alone cannot reveal tokens. Excluded from query_finances
+-- and describe_tables.
+CREATE TABLE IF NOT EXISTS plaid_tokens (
+    env_key TEXT PRIMARY KEY,
+    token_ciphertext TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
 _schema_ensured: set[str] = set()

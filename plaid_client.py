@@ -46,9 +46,9 @@ class SecretStr:
 def load_tokens() -> dict[str, SecretStr]:
     """Load Item access tokens: encrypted store first, env vars override.
 
-    The encrypted store (see secure_tokens.py) keeps tokens off disk in
-    plaintext; PLAID_TOKEN_* env vars are still honored for back-compat and
-    take precedence on key collisions.
+    The encrypted store (see secure_tokens.py) keeps Fernet ciphertext in the
+    plaid_tokens table with the key held locally; PLAID_TOKEN_* env vars are
+    still honored for back-compat and take precedence on key collisions.
     """
     out: dict[str, SecretStr] = {}
     try:

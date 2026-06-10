@@ -115,7 +115,7 @@ def exchange(req: ExchangeReq) -> dict:
     print("=" * 60, flush=True)
     print(f"Institution: {ins_name}", flush=True)
     print(f"Item ID:     {item_id}", flush=True)
-    print(f"Token stored encrypted under key {env_key} in {secure_tokens.secrets_dir()}", flush=True)
+    print(f"Token encrypted and stored in plaid_tokens as {env_key}", flush=True)
     print("=" * 60, flush=True)
 
     return {"institution": ins_name, "item_id": item_id, "env_key": env_key, "stored": "encrypted"}
