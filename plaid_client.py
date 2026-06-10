@@ -44,7 +44,20 @@ class SecretStr:
 
 
 def load_tokens() -> dict[str, SecretStr]:
+    """Load Item access tokens: encrypted store first, env vars override.
+
+    The encrypted store (see secure_tokens.py) keeps tokens off disk in
+    plaintext; PLAID_TOKEN_* env vars are still honored for back-compat and
+    take precedence on key collisions.
+    """
     out: dict[str, SecretStr] = {}
+    try:
+        import secure_tokens
+        for key, value in secure_tokens.load_encrypted_tokens().items():
+            out[key] = SecretStr(value)
+    except Exception as e:
+        # Never log token material; the store path/key name is safe.
+        _log.warning("encrypted token store unavailable: %s", type(e).__name__)
     prefix = "PLAID_TOKEN_"
     for key, value in os.environ.items():
         if key.startswith(prefix) and value:
@@ -52,7 +65,35 @@ def load_tokens() -> dict[str, SecretStr]:
     return out
 
 
-def build_api() -> plaid_api.PlaidApi:
+# Process-wide Plaid API call counter. Used to prove that DuckDB-backed
+# query tools answer without touching Plaid (see get_sync_status).
+_plaid_call_count = 0
+
+
+def plaid_call_count() -> int:
+    return _plaid_call_count
+
+
+class _CountingApi:
+    """Transparent proxy around PlaidApi that counts every API method call."""
+
+    def __init__(self, inner: plaid_api.PlaidApi) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            global _plaid_call_count
+            _plaid_call_count += 1
+            return attr(*args, **kwargs)
+
+        return wrapper
+
+
+def build_api() -> "_CountingApi":
     client_id = os.environ["PLAID_CLIENT_ID"]
     secret = os.environ["PLAID_SECRET"]
     env_name = os.environ.get("PLAID_ENV", "production").lower()
@@ -61,7 +102,7 @@ def build_api() -> plaid_api.PlaidApi:
         host=host,
         api_key={"clientId": client_id, "secret": secret},
     )
-    return plaid_api.PlaidApi(plaid.ApiClient(config))
+    return _CountingApi(plaid_api.PlaidApi(plaid.ApiClient(config)))
 
 
 def map_plaid_error(exc: Exception, institution: str | None) -> dict:

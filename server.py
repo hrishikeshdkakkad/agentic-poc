@@ -552,6 +552,159 @@ search_transactions = mcp.tool(
 )(_search_transactions_impl)
 
 
+# ---------------------------------------------------------------------------
+# Local-history tools (DuckDB-backed). See storage.py / sync.py / analytics.py.
+# ---------------------------------------------------------------------------
+
+import analytics  # noqa: E402
+import storage  # noqa: E402
+import sync as sync_mod  # noqa: E402
+from plaid_client import plaid_call_count  # noqa: E402
+
+
+def _sync_now_impl() -> dict:
+    """Pull new/changed transactions and record today's snapshots into DuckDB.
+
+    Runs the /transactions/sync cursor flow for every healthy Item (resuming
+    from each Item's stored cursor) and appends dated balance, holdings, and
+    liabilities snapshot rows. Idempotent: re-running adds no duplicates.
+    Writes only to the local database — never to Plaid or any bank.
+    """
+    return sync_mod.run_sync()
+
+
+sync_now = mcp.tool(
+    annotations={"title": "Sync Now (local history)"},
+    name="sync_now",
+)(_sync_now_impl)
+
+
+def _get_net_worth_impl() -> dict:
+    """Compute current net worth from live balances, broken down by asset class.
+
+    Classes: cash (depository), investments (taxable investment accounts),
+    retirement (401k/IRA/etc. subtypes), credit_debt, loans, other.
+    net_worth = assets - liabilities. Uses live Plaid balances so the figure
+    is current even between syncs; investment balances already include
+    holdings market value.
+    """
+    live = _get_balances_impl()
+    out = analytics.compose_net_worth(live["accounts"])
+    out["warnings"] = live["warnings"]
+    return out
+
+
+get_net_worth = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Get Net Worth"},
+    name="get_net_worth",
+)(_get_net_worth_impl)
+
+
+def _get_net_worth_history_impl() -> dict:
+    """Net worth over time from local snapshots — zero Plaid calls.
+
+    One row per snapshot date with assets, liabilities, and net worth.
+    Snapshots accumulate each time sync_now (or the sync.py CLI) runs.
+    """
+    return analytics.net_worth_history()
+
+
+get_net_worth_history = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Get Net Worth History"},
+    name="get_net_worth_history",
+)(_get_net_worth_history_impl)
+
+
+def _aggregate_spending_impl(
+    start_date: str,
+    end_date: str,
+    group_by: str = "category",
+    monthly: bool = True,
+    include_pending: bool = False,
+) -> dict:
+    """Aggregate spending from local history — zero Plaid calls, no lookback cap.
+
+    Args:
+        start_date / end_date: ISO YYYY-MM-DD, any range covered by synced data.
+        group_by: "category" (personal finance category) or "merchant".
+        monthly: also split totals by calendar month.
+        include_pending: include pending transactions (default off).
+
+    Spending counts Plaid outflows (amount > 0) and excludes transfers and
+    loan/credit payments so internal money movement isn't "spending".
+    """
+    return analytics.aggregate_spending(
+        start_date, end_date, group_by=group_by, monthly=monthly,
+        include_pending=include_pending,
+    )
+
+
+aggregate_spending = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Aggregate Spending"},
+    name="aggregate_spending",
+)(_aggregate_spending_impl)
+
+
+def _query_finances_impl(sql: str) -> dict:
+    """Escape hatch: run a single read-only SELECT against the local DuckDB.
+
+    Tables: accounts, transactions, balance_snapshots, holdings_snapshots,
+    liabilities_snapshots, sync_state. Only SELECT/WITH statements are
+    accepted; writes and DDL are rejected and the connection is opened
+    read-only. Results are capped at 500 rows. Zero Plaid calls.
+    """
+    try:
+        return analytics.query_finances(sql)
+    except ValueError as e:
+        return {"error": {"code": "INVALID_QUERY", "message": str(e)}}
+
+
+query_finances = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Query Finances (read-only SQL)"},
+    name="query_finances",
+)(_query_finances_impl)
+
+
+def _get_sync_status_impl() -> dict:
+    """Report local-store freshness and the Plaid API call counter.
+
+    Returns per-Item sync cursors/timestamps, row counts per table, and
+    plaid_calls_this_session — the process-wide count of Plaid API calls,
+    useful to prove that DuckDB-backed tools answer without hitting Plaid.
+    """
+    conn = storage.open_readonly()
+    try:
+        items = [
+            {
+                "item_key": r[0],
+                "last_synced_at": str(r[1]) if r[1] else None,
+                "tx_added": r[2], "tx_modified": r[3], "tx_removed": r[4],
+            }
+            for r in conn.execute(
+                "SELECT item_key, last_synced_at, tx_added, tx_modified, tx_removed "
+                "FROM sync_state ORDER BY item_key"
+            ).fetchall()
+        ]
+        counts = {
+            t: conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+            for t in ("accounts", "transactions", "balance_snapshots",
+                      "holdings_snapshots", "liabilities_snapshots")
+        }
+    finally:
+        conn.close()
+    return {
+        "items": items,
+        "table_counts": counts,
+        "plaid_calls_this_session": plaid_call_count(),
+    }
+
+
+get_sync_status = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Get Sync Status"},
+    name="get_sync_status",
+)(_get_sync_status_impl)
+
+
 if __name__ == "__main__":
     mcp.run(
         transport="http",

@@ -1,0 +1,179 @@
+"""Tests for analytics.py and the new DuckDB-backed MCP tools."""
+import asyncio
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+import analytics
+import storage
+import server as srv
+from plaid_client import ItemHealth, SecretStr, plaid_call_count
+
+
+@pytest.fixture
+def seeded_db(tmp_path, monkeypatch):
+    """A DuckDB store seeded with multi-month sandbox-shaped data."""
+    path = str(tmp_path / "finance.duckdb")
+    monkeypatch.setenv("FINANCE_DB_PATH", path)
+    conn = storage.open_db(path)
+    txs = [
+        # (id, date, amount, category, merchant, pending)
+        ("t1", "2025-01-05", 12.50, "FOOD_AND_DRINK", "Starbucks", False),
+        ("t2", "2025-01-20", 55.00, "FOOD_AND_DRINK", "Chipotle", False),
+        ("t3", "2025-02-03", 80.00, "TRAVEL", "Uber", False),
+        ("t4", "2025-02-14", 40.00, "FOOD_AND_DRINK", "Starbucks", False),
+        ("t5", "2025-03-01", 1200.00, "RENT_AND_UTILITIES", "Landlord", False),
+        ("t6", "2025-03-09", -2500.00, "INCOME", "Employer", False),   # inflow
+        ("t7", "2025-03-15", 500.00, "TRANSFER_OUT", "To Savings", False),  # excluded
+        ("t8", "2025-03-20", 9.99, "ENTERTAINMENT", "Netflix", True),  # pending
+    ]
+    for tid, dt, amt, cat, merch, pending in txs:
+        conn.execute(
+            "INSERT INTO transactions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,now())",
+            (tid, "acc_chk", "CHASE", dt, dt, amt, "USD", merch,
+             f"{merch} txn", cat, f"{cat}_X", pending),
+        )
+    for sd, cur in (("2025-01-31", 1000.0), ("2025-02-28", 1500.0), ("2025-03-31", 2000.0)):
+        conn.execute(
+            "INSERT INTO balance_snapshots VALUES (?, now(), 'acc_chk', 'CHASE', 'Chase', "
+            "'depository', 'checking', ?, ?, NULL, 'USD')", (sd, cur, cur))
+        conn.execute(
+            "INSERT INTO balance_snapshots VALUES (?, now(), 'acc_cc', 'CHASE', 'Chase', "
+            "'credit', 'credit card', 400.0, NULL, 5000.0, 'USD')", (sd,))
+    conn.close()
+    return path
+
+
+def test_aggregate_spending_by_category_by_month(seeded_db):
+    out = analytics.aggregate_spending("2025-01-01", "2025-03-31",
+                                       group_by="category", monthly=True)
+    rows = {(r["month"], r["category"]): r["total"] for r in out["rows"]}
+    assert rows[("2025-01", "FOOD_AND_DRINK")] == 67.50
+    assert rows[("2025-02", "FOOD_AND_DRINK")] == 40.00
+    assert rows[("2025-02", "TRAVEL")] == 80.00
+    assert rows[("2025-03", "RENT_AND_UTILITIES")] == 1200.00
+    # transfers, inflows, and pending excluded
+    assert not any(k[1] in ("TRANSFER_OUT", "INCOME", "ENTERTAINMENT") for k in rows)
+    assert out["grand_total"] == pytest.approx(67.50 + 40.0 + 80.0 + 1200.0)
+
+
+def test_aggregate_spending_by_merchant_includes_pending_when_asked(seeded_db):
+    out = analytics.aggregate_spending("2025-01-01", "2025-03-31",
+                                       group_by="merchant", monthly=False,
+                                       include_pending=True)
+    rows = {r["merchant"]: r["total"] for r in out["rows"]}
+    assert rows["Starbucks"] == 52.50
+    assert rows["Netflix"] == 9.99
+
+
+def test_aggregate_spending_validates_inputs(seeded_db):
+    with pytest.raises(ValueError):
+        analytics.aggregate_spending("2025-01-01", "2025-03-31", group_by="evil; DROP")
+    with pytest.raises(ValueError):
+        analytics.aggregate_spending("not-a-date", "2025-03-31")
+
+
+def test_aggregate_spending_makes_zero_plaid_calls(seeded_db):
+    before = plaid_call_count()
+    analytics.aggregate_spending("2025-01-01", "2025-03-31")
+    analytics.net_worth_history()
+    analytics.query_finances("SELECT count(*) FROM transactions")
+    assert plaid_call_count() == before
+
+
+def test_net_worth_history_from_snapshots(seeded_db):
+    out = analytics.net_worth_history()
+    assert [h["date"] for h in out["history"]] == ["2025-01-31", "2025-02-28", "2025-03-31"]
+    first = out["history"][0]
+    assert first == {"date": "2025-01-31", "assets": 1000.0,
+                     "liabilities": 400.0, "net_worth": 600.0}
+
+
+def test_query_finances_select_works_and_writes_rejected(seeded_db):
+    out = analytics.query_finances("SELECT count(*) AS n FROM transactions")
+    assert out["rows"][0][0] == 8
+    for bad in (
+        "DELETE FROM transactions",
+        "INSERT INTO transactions VALUES (1)",
+        "SELECT 1; DROP TABLE transactions",
+        "ATTACH 'other.db'",
+        "COPY transactions TO '/tmp/out.csv'",
+        "WITH x AS (SELECT 1) INSERT INTO transactions SELECT * FROM x",
+        "PRAGMA database_list",
+    ):
+        with pytest.raises(ValueError):
+            analytics.query_finances(bad)
+
+
+def test_query_finances_connection_is_readonly(seeded_db):
+    # Even if validation were bypassed, the connection itself is read-only.
+    conn = storage.open_readonly(seeded_db)
+    with pytest.raises(Exception):
+        conn.execute("DELETE FROM transactions")
+    conn.close()
+
+
+def _shaped(handle, typ, subtype, current, institution="Chase"):
+    return {"handle": handle, "name": handle, "institution": institution,
+            "type": typ, "subtype": subtype, "balance": {"current": current}}
+
+
+def test_compose_net_worth_by_asset_class():
+    accounts = [
+        _shaped("chase_checking_0001", "depository", "checking", 1500.0),
+        _shaped("chase_savings_0002", "depository", "savings", 8000.0),
+        _shaped("fid_brokerage_0003", "investment", "brokerage", 20000.0),
+        _shaped("fid_401k_0004", "investment", "401k", 50000.0),
+        _shaped("fid_ira_0005", "investment", "ira", 10000.0),
+        _shaped("chase_cc_0006", "credit", "credit card", 400.0),
+        _shaped("nav_student_0007", "loan", "student", 12000.0),
+    ]
+    out = analytics.compose_net_worth(accounts)
+    assert out["by_class"]["cash"]["total"] == 9500.0
+    assert out["by_class"]["investments"]["total"] == 20000.0
+    assert out["by_class"]["retirement"]["total"] == 60000.0
+    assert out["by_class"]["credit_debt"]["total"] == 400.0
+    assert out["by_class"]["loans"]["total"] == 12000.0
+    assert out["total_assets"] == 89500.0
+    assert out["total_liabilities"] == 12400.0
+    assert out["net_worth"] == 77100.0
+
+
+def test_get_net_worth_tool_uses_live_balances(seeded_db, fake_env_tokens):
+    fake_api = MagicMock()
+    fake_api.accounts_balance_get.return_value.to_dict.return_value = {
+        "accounts": [
+            {"account_id": "a1", "name": "Checking", "mask": "0001",
+             "type": "depository", "subtype": "checking",
+             "balances": {"current": 100.0, "iso_currency_code": "USD"}},
+            {"account_id": "a2", "name": "Visa", "mask": "0002",
+             "type": "credit", "subtype": "credit card",
+             "balances": {"current": 30.0, "iso_currency_code": "USD"}},
+        ],
+    }
+    items = [("CHASE", SecretStr("t"), ItemHealth("CHASE", "healthy", "ins_3", "Chase"))]
+    with patch.object(srv, "build_api", return_value=fake_api), \
+         patch.object(srv, "all_items", return_value=items):
+        out = srv._get_net_worth_impl()
+    assert out["net_worth"] == 70.0
+    assert out["by_class"]["cash"]["total"] == 100.0
+    assert out["by_class"]["credit_debt"]["total"] == 30.0
+
+
+def test_new_tools_registered():
+    tools = asyncio.run(srv.mcp.list_tools())
+    names = {t.name for t in tools}
+    assert {"sync_now", "get_net_worth", "get_net_worth_history",
+            "aggregate_spending", "query_finances", "get_sync_status"} <= names
+    # original 9 still present
+    assert {"list_accounts", "get_balances", "get_transactions",
+            "get_recurring_transactions", "get_liabilities",
+            "get_investment_holdings", "get_investment_transactions",
+            "get_institutions_status", "search_transactions"} <= names
+
+
+def test_get_sync_status_reports_counts_and_counter(seeded_db):
+    out = srv._get_sync_status_impl()
+    assert out["table_counts"]["transactions"] == 8
+    assert out["table_counts"]["balance_snapshots"] == 6
+    assert isinstance(out["plaid_calls_this_session"], int)
