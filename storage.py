@@ -127,6 +127,32 @@ CREATE TABLE IF NOT EXISTS plaid_tokens (
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Rule-based tags layered on transactions without touching Plaid's category
+-- data. Recovers signals Plaid's merchant-cleaning hides, e.g. delivery orders
+-- filed under the restaurant name (see tagging.py). Join: transaction_id.
+CREATE TABLE IF NOT EXISTS transaction_tags (
+    transaction_id TEXT,
+    tag TEXT,
+    source TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (transaction_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag ON transaction_tags (tag);
+
+-- User category corrections. The rulebook for fixing provider miscategorization
+-- (e.g. "Casey's is never fuel") or applying custom categories (e.g. WEDDING).
+-- apply_overrides() rewrites transactions.category_* in place from these rows,
+-- re-run after every sync/import; a re-fetch restores then re-corrects.
+CREATE TABLE IF NOT EXISTS category_overrides (
+    match_type TEXT NOT NULL,    -- 'merchant' (substring) or 'transaction' (id)
+    match_value TEXT NOT NULL,
+    set_primary TEXT,            -- new category_primary (NULL = leave as-is)
+    set_detailed TEXT,           -- new category_detailed (NULL = leave as-is)
+    note TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (match_type, match_value)
+);
 """
 
 _schema_ensured: set[str] = set()
@@ -143,13 +169,24 @@ def open_db(url: str | None = None) -> psycopg.Connection:
 
 
 def open_readonly(url: str | None = None) -> psycopg.Connection:
-    """Open a connection whose transactions are read-only server-side."""
+    """Open a connection whose transactions are read-only server-side.
+
+    Enforces read-only per transaction (psycopg issues ``BEGIN ... READ ONLY``)
+    rather than via a ``default_transaction_read_only`` *startup* option. The
+    startup-option form is rejected by transaction-pooling poolers such as
+    Neon's ``-pooler`` endpoint ("unsupported startup parameter in options"),
+    whereas per-transaction read-only works through poolers and direct
+    connections alike. autocommit must stay off for the read-only transaction
+    characteristic to take effect (an autocommit SET does not persist across a
+    pooler's multiplexed backends), so callers get a transaction that is
+    rolled back on close — fine for the SELECT-only read path.
+    """
     u = url or database_url()
     if u not in _schema_ensured:
         open_db(u).close()
-    return psycopg.connect(
-        u, autocommit=True, options="-c default_transaction_read_only=on"
-    )
+    conn = psycopg.connect(u, autocommit=False)
+    conn.read_only = True
+    return conn
 
 
 def _now() -> datetime:
@@ -275,6 +312,173 @@ def apply_transactions_sync(
             (item_key, cursor, _now(), len(added), len(modified), len(removed)),
         )
     return {"added": len(added), "modified": len(modified), "removed": len(removed)}
+
+
+_TX_INSERT_NOCONFLICT = """
+INSERT INTO transactions VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+ON CONFLICT (transaction_id) DO NOTHING
+"""
+
+
+def import_transactions(
+    conn: psycopg.Connection,
+    rows: list[dict],
+    item_key: str,
+    account_id: str,
+    institution: str,
+) -> dict:
+    """Import manually-supplied transactions (e.g. an Apple Card CSV) idempotently.
+
+    Two layers of de-duplication, so re-uploading the same or an overlapping
+    statement never double-counts and only brings in genuinely new days:
+
+    1. Date-coverage: any row whose ``date`` is already represented for this
+       ``item_key`` is skipped (that statement period is treated as imported).
+       Rows on not-yet-covered dates — including gaps before the latest date —
+       are candidates.
+    2. Row identity: candidates are inserted with ON CONFLICT (transaction_id)
+       DO NOTHING, so a deterministic id can never insert twice.
+
+    Existing rows are never overwritten. Returns a breakdown of the outcome.
+    """
+    rows = [r for r in rows if r.get("transaction_id") and r.get("date")]
+    with conn.transaction():
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO accounts (account_id, item_key, institution, name, type, subtype, currency, updated_at)
+            VALUES (%s,%s,%s,%s,'credit','credit card',%s,%s)
+            ON CONFLICT (account_id) DO UPDATE SET
+                institution = EXCLUDED.institution, updated_at = EXCLUDED.updated_at
+            """,
+            (account_id, item_key, institution, institution, "USD", _now()),
+        )
+        covered = {
+            r[0] for r in cur.execute(
+                "SELECT DISTINCT date FROM transactions WHERE item_key = %s", (item_key,)
+            ).fetchall()
+        }
+        candidates = [r for r in rows if r["date"] not in covered]
+        before = cur.execute(
+            "SELECT count(*) FROM transactions WHERE item_key = %s", (item_key,)
+        ).fetchone()[0]
+        if candidates:
+            cur.executemany(_TX_INSERT_NOCONFLICT, [
+                (
+                    r["transaction_id"], r["account_id"], r["item_key"], r["date"],
+                    r.get("authorized_date"), r["amount"], r.get("currency"),
+                    r.get("merchant"), r.get("name"), r.get("category_primary"),
+                    r.get("category_detailed"), bool(r.get("pending")), _now(),
+                )
+                for r in candidates
+            ])
+        after = cur.execute(
+            "SELECT count(*) FROM transactions WHERE item_key = %s", (item_key,)
+        ).fetchone()[0]
+
+    apply_tags(conn, item_key)  # tag newly-imported rows (e.g. delivery)
+    apply_overrides(conn)       # apply user category corrections to imported rows
+    imported = after - before
+    dates = [r["date"] for r in rows]
+    return {
+        "rows_in_file": len(rows),
+        "imported": imported,
+        "skipped_existing_date": len(rows) - len(candidates),
+        "skipped_duplicate_id": len(candidates) - imported,
+        "file_date_range": [min(dates).isoformat(), max(dates).isoformat()] if dates else None,
+        "total_for_item": after,
+        "item_key": item_key,
+    }
+
+
+def apply_tags(conn: psycopg.Connection, item_key: str | None = None) -> dict:
+    """(Re)compute rule-based tags for stored transactions (see tagging.py).
+
+    Idempotent: ON CONFLICT DO NOTHING, so re-running adds only newly-matching
+    rows. Scans all transactions, or just one item_key when given (used after a
+    single CSV import). Returns per-tag match counts plus how many were new.
+    """
+    import tagging
+    where = "WHERE item_key = %s" if item_key else ""
+    params = (item_key,) if item_key else ()
+    rows = conn.execute(
+        f"SELECT transaction_id, name, merchant FROM transactions {where}", params
+    ).fetchall()
+    inserts: list[tuple] = []
+    matched: dict[str, int] = {}
+    for tid, name, merchant in rows:
+        for tag in tagging.compute_tags(name, merchant):
+            inserts.append((tid, tag, "rule"))
+            matched[tag] = matched.get(tag, 0) + 1
+    newly = 0
+    if inserts:
+        before = conn.execute("SELECT count(*) FROM transaction_tags").fetchone()[0]
+        conn.cursor().executemany(
+            "INSERT INTO transaction_tags (transaction_id, tag, source) VALUES (%s,%s,%s) "
+            "ON CONFLICT (transaction_id, tag) DO NOTHING",
+            inserts,
+        )
+        after = conn.execute("SELECT count(*) FROM transaction_tags").fetchone()[0]
+        newly = after - before
+    return {"scanned": len(rows), "matched": matched, "newly_tagged": newly}
+
+
+def add_override(match_type: str, match_value: str,
+                 set_primary: str | None = None, set_detailed: str | None = None,
+                 note: str | None = None, db_url: str | None = None) -> None:
+    """Record a category correction. match_type 'merchant' matches a lowercased
+    substring of merchant+name; 'transaction' matches an exact transaction_id."""
+    if match_type not in ("merchant", "transaction"):
+        raise ValueError("match_type must be 'merchant' or 'transaction'")
+    conn = open_db(db_url)
+    try:
+        conn.execute(
+            """
+            INSERT INTO category_overrides (match_type, match_value, set_primary, set_detailed, note)
+            VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (match_type, match_value) DO UPDATE SET
+                set_primary = EXCLUDED.set_primary,
+                set_detailed = EXCLUDED.set_detailed,
+                note = EXCLUDED.note
+            """,
+            (match_type, match_value.lower().strip(), set_primary, set_detailed, note),
+        )
+    finally:
+        conn.close()
+
+
+def list_overrides(db_url: str | None = None) -> list[dict]:
+    conn = open_readonly(db_url)
+    try:
+        rows = conn.execute(
+            "SELECT match_type, match_value, set_primary, set_detailed, note "
+            "FROM category_overrides ORDER BY match_type, match_value"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"match_type": r[0], "match_value": r[1], "set_primary": r[2],
+             "set_detailed": r[3], "note": r[4]} for r in rows]
+
+
+def apply_overrides(conn: psycopg.Connection) -> int:
+    """Rewrite transactions.category_* in place from category_overrides.
+
+    Idempotent (overrides set absolute values), so safe to re-run after every
+    sync/import. Returns the number of transaction rows touched.
+    """
+    cur = conn.execute(
+        """
+        UPDATE transactions t SET
+            category_primary  = COALESCE(o.set_primary, t.category_primary),
+            category_detailed = COALESCE(o.set_detailed, t.category_detailed)
+        FROM category_overrides o
+        WHERE (o.match_type = 'transaction' AND t.transaction_id = o.match_value)
+           OR (o.match_type = 'merchant'
+               AND lower(coalesce(t.merchant,'') || ' ' || coalesce(t.name,''))
+                   LIKE '%' || o.match_value || '%')
+        """
+    )
+    return cur.rowcount
 
 
 def get_cursor(conn: psycopg.Connection, item_key: str) -> str | None:

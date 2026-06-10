@@ -165,10 +165,13 @@ def run_sync(api=None, db_url: str | None = None) -> dict:
                 })
                 entry["snapshots"] = None
             items_out.append(entry)
+        tags = storage.apply_tags(conn)  # keep rule-based tags (e.g. delivery) current
+        storage.apply_overrides(conn)    # re-apply user category corrections post-sync
         total_tx = conn.execute("SELECT count(*) FROM transactions").fetchone()[0]
     finally:
         conn.close()
-    return {"items": items_out, "total_transactions_stored": total_tx, "warnings": warnings}
+    return {"items": items_out, "total_transactions_stored": total_tx,
+            "tags": tags, "warnings": warnings}
 
 
 def main() -> int:

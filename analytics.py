@@ -200,6 +200,26 @@ _TABLE_DOCS: dict[str, dict] = {
             "pending": "TRUE while unsettled; pending rows are replaced when they post",
         },
     },
+    "transaction_tags": {
+        "description": "Rule-based tags layered on transactions (tagging.py), recovering "
+                       "signals Plaid's merchant-cleaning hides — notably tag='delivery' for "
+                       "DoorDash/Uber Eats orders filed under the restaurant name. JOIN on "
+                       "transaction_id to filter/aggregate; never overwrites Plaid categories.",
+        "columns": {
+            "transaction_id": "FK to transactions.transaction_id",
+            "tag": "e.g. 'delivery'. A transaction may have multiple tags (one row each)",
+        },
+    },
+    "category_overrides": {
+        "description": "User category corrections (rulebook). apply_overrides() rewrites "
+                       "transactions.category_primary/detailed in place from these rows after "
+                       "every sync, fixing provider miscategorization (e.g. Casey's tagged as "
+                       "gas) or adding custom categories. transactions already reflect them.",
+        "columns": {
+            "match_type": "'merchant' (substring of merchant+name) or 'transaction' (exact id)",
+            "set_primary": "category_primary written onto matching transactions (NULL = leave)",
+        },
+    },
     "balance_snapshots": {
         "description": "Dated balance per account, appended on every sync. "
                        "Source for net-worth-over-time.",

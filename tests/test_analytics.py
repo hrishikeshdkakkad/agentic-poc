@@ -175,6 +175,7 @@ def test_describe_tables_reports_schema_and_notes(seeded_db):
     assert set(out["tables"]) == {
         "accounts", "transactions", "balance_snapshots",
         "holdings_snapshots", "liabilities_snapshots", "sync_state",
+        "transaction_tags", "category_overrides",
     }
     tx = out["tables"]["transactions"]
     assert "outflow" in tx["description"]
