@@ -108,15 +108,17 @@ def exchange(req: ExchangeReq) -> dict:
     env_suffix = "".join(ch for ch in ins_name.upper() if ch.isalnum())
     env_key = f"PLAID_TOKEN_{env_suffix}" if env_suffix else "PLAID_TOKEN_UNKNOWN"
 
+    # Store encrypted at rest; the raw token is never printed or logged.
+    import secure_tokens
+    secure_tokens.set_token(env_key, access_token)
+
     print("=" * 60, flush=True)
     print(f"Institution: {ins_name}", flush=True)
     print(f"Item ID:     {item_id}", flush=True)
-    print("Add this to your .env (local) and Horizon env (prod):", flush=True)
-    print(f"  {env_key}={access_token}", flush=True)
-    print("Do NOT commit this line.", flush=True)
+    print(f"Token stored encrypted under key {env_key} in {secure_tokens.secrets_dir()}", flush=True)
     print("=" * 60, flush=True)
 
-    return {"institution": ins_name, "item_id": item_id, "env_key": env_key}
+    return {"institution": ins_name, "item_id": item_id, "env_key": env_key, "stored": "encrypted"}
 
 
 INDEX_HTML = """<!doctype html>
