@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 from datetime import date, timedelta
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from fastmcp import FastMCP
 from plaid.exceptions import ApiException
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
@@ -756,9 +762,29 @@ get_sync_status = mcp.tool(
 )(_get_sync_status_impl)
 
 
+def _get_optimizer_score_impl() -> dict:
+    """Score the Optimizer game from local history — zero Plaid calls.
+
+    One hard rule: finish the whole month under the target ($2,600, everything
+    in — rent, travel, dining, taxes; an expense is an expense). Returns the
+    current month vs target with month-to-date pace and category breakdown,
+    your best completed month, lifetime points, months won, and dollars saved
+    toward the wedding. Only money that isn't a real expense (transfers, card
+    payments, savings/investing) is excluded. See gamify.py.
+    """
+    import gamify
+    return gamify.load_game()
+
+
+get_optimizer_score = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Optimizer Score"},
+    name="get_optimizer_score",
+)(_get_optimizer_score_impl)
+
+
 if __name__ == "__main__":
     mcp.run(
         transport="http",
-        host="0.0.0.0",
+        host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
     )
