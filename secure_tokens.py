@@ -37,6 +37,14 @@ _KEY_FILE = "fernet.key"
 _LEGACY_TOKENS_FILE = "tokens.enc"
 
 
+def _tokens_db_url() -> str | None:
+    """Database holding plaid_tokens. Defaults to DATABASE_URL (one shared
+    Postgres, the upstream layout). Set PFM_TOKENS_DATABASE_URL to keep
+    credentials in a separate (e.g. local-only) database from the history
+    store, so access tokens never reach the managed/history database."""
+    return os.environ.get("PFM_TOKENS_DATABASE_URL") or None
+
+
 def secrets_dir() -> str:
     return os.environ.get(
         "PFM_SECRETS_DIR",
@@ -122,7 +130,7 @@ def load_encrypted_tokens() -> dict[str, str]:
     """Decrypt and return {ENV_KEY: token} from the plaid_tokens table."""
     import storage
     f = _get_fernet()
-    conn = storage.open_db()
+    conn = storage.open_db(_tokens_db_url())
     try:
         _migrate_legacy_file(conn, f)
         rows = conn.execute(
@@ -137,7 +145,7 @@ def set_token(env_key: str, token: str) -> None:
     """Add or replace one token. env_key is the bare suffix, e.g. 'CHASE'."""
     import storage
     f = _get_fernet()
-    conn = storage.open_db()
+    conn = storage.open_db(_tokens_db_url())
     try:
         _upsert(conn, _norm(env_key), f.encrypt(token.encode()).decode())
     finally:
@@ -146,7 +154,7 @@ def set_token(env_key: str, token: str) -> None:
 
 def remove_token(env_key: str) -> bool:
     import storage
-    conn = storage.open_db()
+    conn = storage.open_db(_tokens_db_url())
     try:
         cur = conn.execute(
             "DELETE FROM plaid_tokens WHERE env_key = %s", (_norm(env_key),)
@@ -162,7 +170,7 @@ def import_from_env() -> list[str]:
     prefix = "PLAID_TOKEN_"
     f = _get_fernet()
     imported = []
-    conn = storage.open_db()
+    conn = storage.open_db(_tokens_db_url())
     try:
         for key, value in os.environ.items():
             if key.startswith(prefix) and value:

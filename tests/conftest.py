@@ -11,7 +11,7 @@ TEST_DATABASE_URL = os.environ.get(
 
 _ALL_TABLES = ("accounts", "transactions", "balance_snapshots",
                "holdings_snapshots", "liabilities_snapshots", "sync_state",
-               "plaid_tokens")
+               "plaid_tokens", "transaction_tags", "category_overrides")
 
 
 def _pg_available() -> bool:
@@ -31,6 +31,11 @@ def isolate_local_state(tmp_path, monkeypatch):
     """Keep tests away from the real token store and finance database."""
     monkeypatch.setenv("PFM_SECRETS_DIR", str(tmp_path / "pfm-secrets"))
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+    # Pin the split token store to the SAME test database. CLI entrypoints call
+    # load_dotenv(); pinning (not deleting) keeps that no-override load from
+    # re-introducing a real PFM_TOKENS_DATABASE_URL from .env and writing test
+    # tokens into the live plaid_tokens table.
+    monkeypatch.setenv("PFM_TOKENS_DATABASE_URL", TEST_DATABASE_URL)
 
 
 @pytest.fixture
