@@ -665,6 +665,57 @@ query_finances = mcp.tool(
 )(_query_finances_impl)
 
 
+def _describe_tables_impl() -> dict:
+    """Describe the local DuckDB schema: tables, columns, types, and conventions.
+
+    Call this before writing query_finances SQL or when unsure where data
+    lives. Includes the Plaid sign convention (amount > 0 = outflow) and the
+    join keys between tables. Zero Plaid calls.
+    """
+    return analytics.describe_tables()
+
+
+describe_tables = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Describe Local Tables"},
+    name="describe_tables",
+)(_describe_tables_impl)
+
+
+def _list_transactions_impl(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    account_id: str | None = None,
+    category: str | None = None,
+    merchant_contains: str | None = None,
+    min_amount: float | None = None,
+    max_amount: float | None = None,
+    include_pending: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """List raw transactions from local history with filters — zero Plaid calls.
+
+    All filters are optional and combine with AND: ISO date range, account_id,
+    category (personal-finance category, case-insensitive), merchant substring,
+    amount bounds (Plaid convention: positive = outflow). Newest first, paged
+    via limit (max 500) and offset; total_matching reports the unpaged count.
+    Unlike get_transactions, this reads the local store, so there is no
+    2-year lookback cap and no Plaid traffic.
+    """
+    return analytics.list_transactions(
+        start_date=start_date, end_date=end_date, account_id=account_id,
+        category=category, merchant_contains=merchant_contains,
+        min_amount=min_amount, max_amount=max_amount,
+        include_pending=include_pending, limit=limit, offset=offset,
+    )
+
+
+list_transactions = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "List Transactions (local)"},
+    name="list_transactions",
+)(_list_transactions_impl)
+
+
 def _get_sync_status_impl() -> dict:
     """Report local-store freshness and the Plaid API call counter.
 

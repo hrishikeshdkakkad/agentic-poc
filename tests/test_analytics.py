@@ -164,12 +164,67 @@ def test_new_tools_registered():
     tools = asyncio.run(srv.mcp.list_tools())
     names = {t.name for t in tools}
     assert {"sync_now", "get_net_worth", "get_net_worth_history",
-            "aggregate_spending", "query_finances", "get_sync_status"} <= names
+            "aggregate_spending", "query_finances", "get_sync_status",
+            "describe_tables", "list_transactions"} <= names
     # original 9 still present
     assert {"list_accounts", "get_balances", "get_transactions",
             "get_recurring_transactions", "get_liabilities",
             "get_investment_holdings", "get_investment_transactions",
             "get_institutions_status", "search_transactions"} <= names
+
+
+def test_describe_tables_reports_schema_and_notes(seeded_db):
+    out = analytics.describe_tables()
+    assert set(out["tables"]) == {
+        "accounts", "transactions", "balance_snapshots",
+        "holdings_snapshots", "liabilities_snapshots", "sync_state",
+    }
+    tx = out["tables"]["transactions"]
+    assert "outflow" in tx["description"]
+    cols = {c["name"]: c for c in tx["columns"]}
+    assert cols["amount"]["type"] == "DOUBLE"
+    assert "Positive = money out" in cols["amount"]["note"]
+    assert any("outflow" in c for c in out["conventions"])
+
+
+def test_list_transactions_filters_and_paging(seeded_db):
+    out = analytics.list_transactions(category="food_and_drink")
+    assert out["total_matching"] == 3
+    assert {t["merchant"] for t in out["transactions"]} == {"Starbucks", "Chipotle"}
+
+    out = analytics.list_transactions(merchant_contains="star")
+    assert all(t["merchant"] == "Starbucks" for t in out["transactions"])
+    assert out["total_matching"] == 2
+
+    out = analytics.list_transactions(start_date="2025-02-01", end_date="2025-02-28")
+    assert {t["transaction_id"] for t in out["transactions"]} == {"t3", "t4"}
+
+    out = analytics.list_transactions(min_amount=100.0, include_pending=False)
+    assert {t["transaction_id"] for t in out["transactions"]} == {"t5", "t7"}
+
+    out = analytics.list_transactions(limit=2, offset=0)
+    assert len(out["transactions"]) == 2
+    assert out["total_matching"] == 8
+    # newest first
+    assert out["transactions"][0]["date"] >= out["transactions"][1]["date"]
+    page2 = analytics.list_transactions(limit=2, offset=2)
+    assert {t["transaction_id"] for t in page2["transactions"]}.isdisjoint(
+        {t["transaction_id"] for t in out["transactions"]}
+    )
+
+
+def test_list_transactions_validates_dates_and_caps_limit(seeded_db):
+    with pytest.raises(ValueError):
+        analytics.list_transactions(start_date="not-a-date")
+    out = analytics.list_transactions(limit=99999)
+    assert out["limit"] == 500
+
+
+def test_list_transactions_zero_plaid_calls(seeded_db):
+    before = plaid_call_count()
+    analytics.list_transactions(category="FOOD_AND_DRINK")
+    analytics.describe_tables()
+    assert plaid_call_count() == before
 
 
 def test_get_sync_status_reports_counts_and_counter(seeded_db):

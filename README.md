@@ -58,6 +58,8 @@ python sync.py                       # cron-able CLI; same effect as the sync_no
 | `get_net_worth_history` | Net worth per snapshot date, from local snapshots — zero Plaid calls                   |
 | `aggregate_spending`    | Spend by category/merchant, optionally by month, over any range — zero Plaid calls     |
 | `query_finances`        | Escape hatch: single read-only SELECT against the local DuckDB (writes rejected)       |
+| `describe_tables`       | Local schema with column notes and conventions — call before writing SQL               |
+| `list_transactions`     | Raw stored transactions with filters (dates, category, merchant, amount) + paging — zero Plaid calls |
 | `get_sync_status`       | Store freshness, table counts, and the Plaid-API call counter                          |
 
 ### Original live tools

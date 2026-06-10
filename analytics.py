@@ -176,6 +176,181 @@ def aggregate_spending(
 
 
 # ---------------------------------------------------------------------------
+# Schema discovery + raw transaction listing (agent-facing granular access)
+# ---------------------------------------------------------------------------
+
+_TABLE_DOCS: dict[str, dict] = {
+    "accounts": {
+        "description": "One row per linked account; refreshed on every sync.",
+        "columns": {
+            "account_id": "Plaid account id — joins to transactions and all snapshot tables",
+            "item_key": "Which linked Item (institution token) owns the account",
+            "type": "Plaid type: depository | investment | credit | loan",
+            "subtype": "Plaid subtype, e.g. checking, 401k, ira, credit card, student",
+        },
+    },
+    "transactions": {
+        "description": "Full transaction history from /transactions/sync. "
+                       "Sign convention: amount > 0 is an outflow (spending), "
+                       "amount < 0 is an inflow (income/refund).",
+        "columns": {
+            "transaction_id": "Primary key; upserts keep re-syncs duplicate-free",
+            "amount": "Positive = money out, negative = money in (Plaid convention)",
+            "category_primary": "Plaid personal-finance category, e.g. FOOD_AND_DRINK, TRANSFER_OUT",
+            "category_detailed": "Finer-grained category",
+            "pending": "TRUE while unsettled; pending rows are replaced when they post",
+        },
+    },
+    "balance_snapshots": {
+        "description": "Dated balance per account, appended on every sync. "
+                       "Source for net-worth-over-time.",
+        "columns": {
+            "snapshot_date": "One row per account per day (re-syncs same day overwrite)",
+            "current": "Balance at snapshot time; for credit/loan this is amount owed",
+        },
+    },
+    "holdings_snapshots": {
+        "description": "Dated investment positions (symbol, quantity, value) per account.",
+        "columns": {
+            "market_value": "Position value at snapshot time",
+            "cost_basis": "Total cost basis as reported by the institution",
+        },
+    },
+    "liabilities_snapshots": {
+        "description": "Dated debt detail: APRs, rates, minimum payments, outstanding balance.",
+        "columns": {
+            "liability_type": "credit | student | mortgage",
+            "outstanding_balance": "Amount owed at snapshot time",
+        },
+    },
+    "sync_state": {
+        "description": "Per-Item /transactions/sync cursor and lifetime counters.",
+        "columns": {
+            "cursor": "Opaque Plaid cursor; internal bookkeeping",
+        },
+    },
+}
+
+
+def describe_tables(db_path: str | None = None) -> dict:
+    """Return the live schema of every table, annotated with usage notes."""
+    conn = storage.open_readonly(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'main'
+            ORDER BY table_name, ordinal_position
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    tables: dict[str, dict] = {}
+    for table_name, column_name, data_type in rows:
+        doc = _TABLE_DOCS.get(table_name, {})
+        entry = tables.setdefault(table_name, {
+            "description": doc.get("description"),
+            "columns": [],
+        })
+        col: dict = {"name": column_name, "type": data_type}
+        note = doc.get("columns", {}).get(column_name)
+        if note:
+            col["note"] = note
+        entry["columns"].append(col)
+    return {
+        "tables": tables,
+        "conventions": [
+            "transaction amount > 0 = outflow (spending), < 0 = inflow (Plaid convention)",
+            "snapshots are append-per-date; same-day re-syncs overwrite, never duplicate",
+            "join key across tables: account_id",
+        ],
+    }
+
+
+_LIST_MAX = 500
+
+
+def list_transactions(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    account_id: str | None = None,
+    category: str | None = None,
+    merchant_contains: str | None = None,
+    min_amount: float | None = None,
+    max_amount: float | None = None,
+    include_pending: bool = True,
+    limit: int = 100,
+    offset: int = 0,
+    db_path: str | None = None,
+) -> dict:
+    """List raw stored transactions with filters. Never calls Plaid.
+
+    Filters combine with AND. ``category`` matches category_primary
+    (case-insensitive); ``merchant_contains`` is a case-insensitive
+    substring match on merchant. Results are newest-first.
+    """
+    where: list[str] = []
+    params: list = []
+    if start_date:
+        date.fromisoformat(start_date)
+        where.append("date >= ?")
+        params.append(start_date)
+    if end_date:
+        date.fromisoformat(end_date)
+        where.append("date <= ?")
+        params.append(end_date)
+    if account_id:
+        where.append("account_id = ?")
+        params.append(account_id)
+    if category:
+        where.append("upper(coalesce(category_primary, '')) = upper(?)")
+        params.append(category)
+    if merchant_contains:
+        where.append("merchant ILIKE '%' || ? || '%'")
+        params.append(merchant_contains)
+    if min_amount is not None:
+        where.append("amount >= ?")
+        params.append(min_amount)
+    if max_amount is not None:
+        where.append("amount <= ?")
+        params.append(max_amount)
+    if not include_pending:
+        where.append("pending = FALSE")
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    limit = max(1, min(int(limit), _LIST_MAX))
+    offset = max(0, int(offset))
+
+    cols = ("transaction_id", "account_id", "date", "amount", "currency",
+            "merchant", "name", "category_primary", "category_detailed", "pending")
+    conn = storage.open_readonly(db_path)
+    try:
+        total = conn.execute(
+            f"SELECT count(*) FROM transactions {where_sql}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {', '.join(cols)} FROM transactions {where_sql} "
+            f"ORDER BY date DESC, transaction_id LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        d["date"] = str(d["date"]) if d["date"] else None
+        out.append(d)
+    return {
+        "transactions": out,
+        "total_matching": total,
+        "limit": limit,
+        "offset": offset,
+        "source": "local_duckdb",
+    }
+
+
+# ---------------------------------------------------------------------------
 # query_finances: read-only SQL escape hatch
 # ---------------------------------------------------------------------------
 
