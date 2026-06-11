@@ -177,3 +177,34 @@ def test_mode_damage_control_at_exact_target():
     rows = [_row(date(2026, 6, 3), 750.0)]
     out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 5))
     assert out["plan"]["mode"] == "DAMAGE_CONTROL"
+
+
+# ---- subscription projection ---------------------------------------------------
+
+def _subs_rows():
+    return [
+        _row(date(2026, 5, 22), 200.0, "GENERAL_SERVICES", "Claude.ai", "CLAUDE.AI SUBSCRIPTION"),
+        _row(date(2026, 4, 20), 100.0, "GENERAL_SERVICES", "Claude.ai", "CLAUDE.AI SUBSCRIPTION"),
+        _row(date(2026, 5, 1), 20.0, "GENERAL_SERVICES", "Vercel Inc.", "VERCEL"),
+        _row(date(2026, 6, 1), 20.0, "GENERAL_SERVICES", "Vercel Inc.", "VERCEL"),
+        _row(date(2026, 5, 5), 20.0, "GENERAL_SERVICES", "OpenAI", "OPENAI *CHATGPT"),
+        # outside the 60-day window ending Jun 11 (starts Apr 13) — must be excluded
+        _row(date(2026, 4, 10), 102.73, "GENERAL_SERVICES", "Claude.ai", "CLAUDE.AI SUBSCRIPTION"),
+        # in window but not a subscription — must be excluded
+        _row(date(2026, 6, 5), 50.0, "GENERAL_MERCHANDISE", "Walmart", "WALMART GROCERY"),
+    ]
+
+
+def test_project_subscriptions_trailing_window_per_merchant():
+    subs = planner.project_subscriptions(_subs_rows(), date(2026, 6, 11))
+    # window = Apr 13..Jun 11 (60 days); monthly = sum / 2
+    assert subs["by_merchant"] == {"Claude.ai": 150.0, "Vercel Inc.": 20.0, "OpenAI": 10.0}
+    assert subs["total"] == 180.0
+    # sorted largest-first (dict preserves insertion order)
+    assert list(subs["by_merchant"]) == ["Claude.ai", "Vercel Inc.", "OpenAI"]
+
+
+def test_plan_month_carries_projected_subs():
+    rows = _june_rows() + _subs_rows()
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    assert out["plan"]["projected_subs_monthly"] == 190.0   # 180 + OpenAI Jun-7 20/2=10

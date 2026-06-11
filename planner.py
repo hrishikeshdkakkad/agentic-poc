@@ -40,6 +40,32 @@ ENV_LABEL = {"walmart": "Walmart", "indian": "Indian store",
              "subscriptions": "Subscriptions", "other": "Everything else"}
 
 
+def project_subscriptions(rows: list[dict], today: date) -> dict:
+    """Per-merchant monthly subscription estimate from the trailing window.
+
+    Sum of subscriptions-classified spend over SUBS_WINDOW_DAYS, divided by
+    the window length in months (60d → 2.0). Deterministic — no cadence
+    heuristics; the kill-list needs names and sizes, not predictions.
+    """
+    start = today - timedelta(days=SUBS_WINDOW_DAYS - 1)
+    months = SUBS_WINDOW_DAYS / 30.0
+    raw: dict[str, float] = {}
+    for r in rows:
+        d = r.get("date")
+        if d is None or d < start or d > today:
+            continue
+        if not gamify.is_expense(r.get("category_primary"), r.get("name"),
+                                 r.get("merchant"), r.get("amount")):
+            continue
+        if classify(r.get("name"), r.get("merchant")) != "subscriptions":
+            continue
+        key = r.get("merchant") or r.get("name") or "unknown"
+        raw[key] = raw.get(key, 0.0) + float(r["amount"])
+    monthly = {m: round(v / months, 2) for m, v in raw.items()}
+    return {"by_merchant": dict(sorted(monthly.items(), key=lambda kv: -kv[1])),
+            "total": round(sum(monthly.values()), 2)}
+
+
 def classify(name: str | None, merchant: str | None) -> str:
     """Envelope for one transaction: rent|subscriptions|walmart|indian|other.
 
@@ -132,7 +158,8 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
     week = {"days_left": days_left, "weeks_left": weeks_left}
     no_spend_days = max(0, day - len(spend_days))  # consumed by build_directives (Task 6)
 
-    subs_total = 0.0           # Task 4 replaces this line with project_subscriptions
+    subs = project_subscriptions(rows, today if in_month else ms.replace(day=dim))
+    subs_total = subs["total"]
     directives: list[dict] = []  # Task 5 replaces this line with build_directives
 
     plan = {
