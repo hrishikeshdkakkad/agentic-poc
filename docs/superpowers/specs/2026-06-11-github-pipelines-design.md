@@ -119,5 +119,5 @@ workflow_dispatch ──▶ same as push to main
 3. Re-running deploy via `workflow_dispatch` works from the GitHub UI.
 4. `aws sts` shows the role assumable only from this repo/branch (negative
    test: trust policy inspection).
-5. Local `pytest`, `test_lambda_local.py`, and `verify_remote.py` all still
+5. Local `pytest`, `check_lambda_local.py`, and `verify_remote.py` all still
    pass; local deploy.sh path unchanged.
