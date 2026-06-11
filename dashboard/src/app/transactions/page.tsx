@@ -45,7 +45,9 @@ function Explorer() {
   const accounts = useTool<Accounts>("list_accounts");
   const acctName = (id: string) => {
     const a = accounts.data?.accounts.find((x) => x.account_id === id);
-    return a ? `${a.institution} ${a.name}${a.mask ? ` ••${a.mask}` : ""}` : id.slice(0, 12);
+    if (!a) return id.slice(0, 12);
+    const label = a.name === a.institution ? a.institution : `${a.institution} ${a.name}`;
+    return `${label}${a.mask ? ` ••${a.mask}` : ""}`;
   };
 
   function apply() { setApplied(filters); setOffset(0); }
