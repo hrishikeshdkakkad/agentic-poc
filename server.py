@@ -865,6 +865,28 @@ get_optimizer_score = mcp.tool(
 )(_get_optimizer_score_impl)
 
 
+def _get_optimizer_plan_impl() -> dict:
+    """Decide the month: envelope plan + hard orders from local history — zero Plaid calls.
+
+    The scoreboard's prescriptive twin. Rent ($1,850) is committed on day 1;
+    four envelopes split the remaining $750 — walmart groceries, indian-store
+    groceries, subscriptions, everything else. Returns the month's plan (mode:
+    NORMAL/TIGHT/DAMAGE_CONTROL, envelope burn-down with self-correcting
+    weekly allowances, rent watch, projected subscription cost) plus ordered
+    directives: STOP orders for empty envelopes, a largest-first subscription
+    kill-list, survival grocery floors when the month is already lost.
+    Recomputed from transactions every call. See planner.py.
+    """
+    import planner
+    return planner.load_plan()
+
+
+get_optimizer_plan = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Optimizer Plan"},
+    name="get_optimizer_plan",
+)(_get_optimizer_plan_impl)
+
+
 # ---------------------------------------------------------------------------
 # Deep-insight tools (wealth.py / insights.py) — zero Plaid calls, answer
 # from the local history store so agents can call them liberally.

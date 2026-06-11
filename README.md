@@ -62,6 +62,7 @@ python sync.py                       # cron-able CLI; same effect as the sync_no
 | `list_transactions`     | Raw stored transactions with filters (dates, category, merchant, amount) + paging — zero Plaid calls |
 | `get_sync_status`       | Store freshness, table counts, and the Plaid-API call counter                          |
 | `get_optimizer_score`   | The Optimizer game: month-to-date spend vs the hard monthly target, points, records    |
+| `get_optimizer_plan`    | The Optimizer planner: envelope plan + hard directives — stop orders, subscription kill-list, damage control |
 
 ### Deep-insight tools (Postgres-backed, this fork)
 

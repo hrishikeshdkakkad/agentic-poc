@@ -8,7 +8,7 @@ export const ALLOWED_TOOLS = new Set([
   "list_transactions", "get_sync_status", "get_optimizer_score", "get_debt_analysis",
   "get_portfolio_analysis", "get_income_analysis", "get_net_worth_trajectory",
   "get_recurring_analysis", "get_merchant_profile", "compare_periods",
-  "get_financial_health", "list_category_overrides",
+  "get_financial_health", "list_category_overrides", "get_optimizer_plan",
   "sync_now", "set_category_override", "set_manual_balance",
 ]);
 
