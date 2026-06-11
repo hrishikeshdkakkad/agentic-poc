@@ -18,6 +18,20 @@ Then:
 
 Optional `.env.local` (see `.env.local.example`): `MCP_URL`, `LINK_HELPER_URL`.
 
+## Pages
+
+- `/` — net worth, runway/savings/flags, Optimizer pace, link & sync status
+- `/accounts` — accounts by institution; expand for balance history + latest transactions
+- `/transactions` — full explorer: date/account/category/merchant/amount filters, tags,
+  merchant profile drawer, inline category fixes (writes `category_overrides`)
+- `/spending` — stacked monthly categories, totals by category/merchant, month-vs-month compare;
+  every bar and row links into the explorer
+- `/net-worth` — snapshot history chart, 30-day change, milestone trajectory
+- `/investments` — positions, allocation, concentration, on-demand live activity
+- `/debt` — carried debts, utilization, payoff scenarios + payment simulator, live liability detail
+- `/cash-flow` — income vs expenses, income sources/buckets, recurring streams with price-change flags
+- `/connections` — port of the original link_helper UI: Plaid Link, sync now, Apple Card CSV import
+
 ## Architecture
 
 - `/api/mcp/[tool]` → MCP client → `localhost:8000/mcp` (allowlisted tools; all analytics)
