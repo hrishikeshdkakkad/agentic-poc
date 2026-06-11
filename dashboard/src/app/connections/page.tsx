@@ -2,9 +2,9 @@
 
 import Script from "next/script";
 import { useRef, useState } from "react";
-import { useLinkStatus } from "@/lib/hooks";
-import { linkFetch } from "@/lib/api";
-import { fmtDateTime } from "@/lib/format";
+import { useLinkStatus, useTool } from "@/lib/hooks";
+import { callTool, linkFetch } from "@/lib/api";
+import { fmtDateTime, usd } from "@/lib/format";
 import { Card, ErrorBanner, Loading, StatusBadge } from "@/components/ui";
 
 declare global {
@@ -197,6 +197,89 @@ export default function Connections() {
         </div>
         {csvOut && <pre className="mt-2 whitespace-pre-wrap text-xs text-mut">{csvOut}</pre>}
       </Card>
+
+      <ManualBalanceCard />
     </div>
+  );
+}
+
+/** CSV exports carry no balance — record the real one (from the issuer's app)
+ * so debt and net-worth views include the account. */
+function ManualBalanceCard() {
+  const accounts = useTool<{
+    accounts: Array<{ account_id: string; institution: string | null; name: string | null;
+      type?: string | null; source?: string; balance?: { current: number | null } }>;
+  }>("list_accounts");
+  const manual = accounts.data?.accounts.filter((a) => a.source === "csv_import") ?? [];
+  const [acct, setAcct] = useState("");
+  const [bal, setBal] = useState("");
+  const [apr, setApr] = useState("");
+  const [minPay, setMinPay] = useState("");
+  const [out, setOut] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!accounts.data || manual.length === 0) return null;
+  const selected = manual.find((a) => a.account_id === acct) ?? manual[0];
+  const inp = "rounded-md border border-line bg-bg px-2 py-1.5 text-sm";
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!bal) return;
+    setBusy(true);
+    setOut("");
+    try {
+      const args: Record<string, unknown> = {
+        account_id: selected.account_id,
+        current_balance: Number(bal),
+      };
+      if (apr) args.apr_percentage = Number(apr);
+      if (minPay) args.minimum_payment = Number(minPay);
+      const res = await callTool<{
+        ok?: boolean; snapshot_date?: string; liability_recorded?: boolean;
+        error?: { message: string };
+      }>("set_manual_balance", args);
+      setOut(res.ok
+        ? `✓ Recorded ${usd(Number(bal))} for ${selected.institution} (${res.snapshot_date})` +
+          (res.liability_recorded ? " — debt & net-worth views updated" : "")
+        : `✗ ${res.error?.message ?? "failed"}`);
+      accounts.mutate();
+    } catch (err) {
+      setOut(`✗ ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Record balance (manual accounts)" className="mt-4">
+      <p className="mb-3 text-sm text-mut">
+        CSV exports carry no balance. Enter the current balance from the issuer&apos;s app
+        (e.g. Wallet for Apple Card) so Debt and Net worth include this account.
+        Re-entering the same day overwrites; new days build history.
+        {selected.balance?.current != null && (
+          <> Last recorded: <b className="text-txt">{usd(selected.balance.current)}</b>.</>
+        )}
+      </p>
+      <form className="flex flex-wrap items-center gap-2" onSubmit={save}>
+        <select className={inp} value={selected.account_id} onChange={(e) => setAcct(e.target.value)}>
+          {manual.map((a) => (
+            <option key={a.account_id} value={a.account_id}>
+              {a.institution}{a.name && a.name !== a.institution ? ` ${a.name}` : ""}
+            </option>
+          ))}
+        </select>
+        <input className={inp} type="number" step="0.01" placeholder="Current balance $" required
+          value={bal} onChange={(e) => setBal(e.target.value)} />
+        <input className={inp} type="number" step="0.01" placeholder="APR % (optional)"
+          value={apr} onChange={(e) => setApr(e.target.value)} />
+        <input className={inp} type="number" step="0.01" placeholder="Min payment $ (optional)"
+          value={minPay} onChange={(e) => setMinPay(e.target.value)} />
+        <button disabled={busy || !bal}
+          className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+          {busy ? "Saving…" : "Record"}
+        </button>
+      </form>
+      {out && <div className="mt-2 text-sm text-mut">{out}</div>}
+    </Card>
   );
 }

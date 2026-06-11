@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A self-hosted, **read-only**, **single-tenant** personal-finance MCP server (FastMCP) backed by Plaid. The read-only posture is a security property: no tool may mutate state at any institution. The only writes allowed are to the user's own Postgres history store (sync, CSV import, tags, category overrides). See CONTRIBUTING.md for scope limits before adding tools.
+A self-hosted, **read-only**, **single-tenant** personal-finance MCP server (FastMCP) backed by Plaid. The read-only posture is a security property: no tool may mutate state at any institution. The only writes allowed are to the user's own Postgres history store (sync, CSV import, tags, category overrides, manual balance snapshots for accounts with no Plaid Item). See CONTRIBUTING.md for scope limits before adding tools.
 
 ## Commands
 

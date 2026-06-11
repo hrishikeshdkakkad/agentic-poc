@@ -9,7 +9,7 @@ export const ALLOWED_TOOLS = new Set([
   "get_portfolio_analysis", "get_income_analysis", "get_net_worth_trajectory",
   "get_recurring_analysis", "get_merchant_profile", "compare_periods",
   "get_financial_health", "list_category_overrides",
-  "sync_now", "set_category_override",
+  "sync_now", "set_category_override", "set_manual_balance",
 ]);
 
 type RawResult = {

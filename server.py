@@ -61,6 +61,15 @@ def _manual_accounts(plaid_keys: set[str], warnings: list[dict]) -> list[dict]:
                 " mask, type, subtype, currency FROM accounts"
                 " ORDER BY institution, name"
             ).fetchall()
+            # Latest user-stated balance per account (set_manual_balance);
+            # accounts without one keep null balances.
+            manual_balances = {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT DISTINCT ON (account_id) account_id, current"
+                    " FROM balance_snapshots"
+                    " ORDER BY account_id, snapshot_date DESC"
+                ).fetchall()
+            }
         finally:
             conn.close()
     except Exception as e:
@@ -80,7 +89,8 @@ def _manual_accounts(plaid_keys: set[str], warnings: list[dict]) -> list[dict]:
             "mask": mask,
             "type": type_,
             "subtype": subtype,
-            "balance": {"current": None, "available": None, "limit": None,
+            "balance": {"current": manual_balances.get(account_id),
+                        "available": None, "limit": None,
                         "currency": currency},
             "source": "csv_import",
         }
@@ -648,7 +658,27 @@ def _get_net_worth_impl() -> dict:
     holdings market value.
     """
     live = _get_balances_impl()
-    out = analytics.compose_net_worth(live["accounts"])
+    # Manual accounts with a user-stated balance (set_manual_balance) count
+    # too; ones without stay balance-null and compose_net_worth skips them.
+    # "Manual" = item has no sync cursor, the same rule record_manual_balance
+    # enforces — Plaid-mirrored accounts are excluded even when their Item is
+    # temporarily unhealthy, so a stale snapshot never substitutes for live.
+    try:
+        conn = storage.open_readonly()
+        try:
+            synced_keys = {r[0] for r in conn.execute(
+                "SELECT item_key FROM sync_state").fetchall()}
+        finally:
+            conn.close()
+    except Exception as e:
+        synced_keys = None
+        live["warnings"].append({
+            "institution": "manual imports",
+            "status": "db_unavailable",
+            "reason": f"manual accounts omitted from net worth: {e}",
+        })
+    manual = _manual_accounts(synced_keys, live["warnings"]) if synced_keys is not None else []
+    out = analytics.compose_net_worth(live["accounts"] + manual)
     out["warnings"] = live["warnings"]
     return out
 
@@ -1034,6 +1064,39 @@ set_category_override = mcp.tool(
     annotations={"title": "Set Category Override"},
     name="set_category_override",
 )(_set_category_override_impl)
+
+
+def _set_manual_balance_impl(account_id: str, current_balance: float,
+                             apr_percentage: float | None = None,
+                             minimum_payment: float | None = None) -> dict:
+    """Record today's real balance for a manually-imported account (no Plaid Item).
+
+    CSV imports (e.g. Apple Card) carry transactions but no balance, so those
+    accounts are invisible to debt and net-worth tools. This stores the
+    user-stated balance — read it from the issuer's app — as the same dated
+    snapshots the Plaid sync writes (balance_snapshots, plus
+    liabilities_snapshots with APR/minimum payment for credit/loan accounts),
+    so every balance-derived tool picks the account up. Re-entering the same
+    day overwrites; new days build history. Plaid-synced accounts are
+    rejected — their balances come from sync.
+    """
+    conn = storage.open_db()
+    try:
+        out = storage.record_manual_balance(
+            conn, account_id, current=current_balance,
+            apr_percentage=apr_percentage, minimum_payment=minimum_payment,
+        )
+    except ValueError as e:
+        return {"error": {"code": "INVALID_MANUAL_BALANCE", "message": str(e)}}
+    finally:
+        conn.close()
+    return out
+
+
+set_manual_balance = mcp.tool(
+    annotations={"title": "Set Manual Balance"},
+    name="set_manual_balance",
+)(_set_manual_balance_impl)
 
 
 def _list_category_overrides_impl() -> dict:
