@@ -126,3 +126,47 @@ def test_last_day_of_month_weekly_allowance_is_full_remaining():
     assert p["week"] == {"days_left": 1, "weeks_left": 1}
     env = {e["key"]: e for e in p["envelopes"]}
     assert env["walmart"]["weekly_allowance"] == 180
+
+
+# ---- modes -------------------------------------------------------------------
+
+def test_mode_tight_when_an_envelope_is_over_pace():
+    # _june_rows: 'other' has 100 of 190 spent by day 11 (share 69.67) → slow → TIGHT
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    assert out["plan"]["mode"] == "TIGHT"
+    env = {e["key"]: e for e in out["plan"]["envelopes"]}
+    assert env["other"]["state"] == "slow"
+
+
+def test_mode_normal_when_all_open_and_non_rent_pace_ok():
+    rows = [r for r in _june_rows() if r["amount"] != 100.0]   # drop the cafe spend
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    assert out["plan"]["mode"] == "NORMAL"
+    # rent posting day 4 must NOT flag TIGHT — pace is judged on non-rent spend
+    assert all(e["state"] == "open" for e in out["plan"]["envelopes"])
+
+
+def test_mode_damage_control_when_month_is_lost_forces_everything_closed():
+    rows = _june_rows() + [_row(date(2026, 6, 9), 2413.40, "TRAVEL", "Alamo Rent-a-car", "ALAMO")]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    p = out["plan"]
+    assert p["total_spent"] == 4436.20
+    assert p["mode"] == "DAMAGE_CONTROL"
+    assert all(e["state"] == "closed" for e in p["envelopes"])
+    assert all(e["weekly_allowance"] == 0 for e in p["envelopes"])
+
+
+def test_mode_damage_control_counts_unposted_rent_as_committed():
+    # 800 spent, rent not posted yet: 800 + 1850 reserve = 2650 ≥ 2600 → already lost
+    rows = [_row(date(2026, 6, 3), 800.0)]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 5))
+    assert out["plan"]["mode"] == "DAMAGE_CONTROL"
+
+
+def test_empty_rows_is_a_clean_normal_plan():
+    out = planner.plan_month([], date(2026, 6, 1), date(2026, 6, 1))
+    p = out["plan"]
+    assert p["mode"] == "NORMAL"
+    assert p["total_spent"] == 0.0
+    assert all(e["state"] == "open" and e["remaining"] == e["budget"] for e in p["envelopes"])
+    assert p["rent"]["status"] == "reserved"

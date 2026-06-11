@@ -110,7 +110,21 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
             "state": state,
         })
 
-    mode = "NORMAL"            # Task 3 replaces this line with real mode logic
+    committed = total + (RENT_RESERVE if rent_posted <= 0 else 0.0)
+    non_rent_total = total - rent_posted
+    non_rent_budget = target - RENT_RESERVE
+    if committed >= target:
+        # Month is mathematically lost. Goal flips: minimize overage, protect
+        # next month. A blown month must LOOK blown — close everything.
+        mode = "DAMAGE_CONTROL"
+        for e in envelopes:
+            e["state"] = "closed"
+            e["weekly_allowance"] = 0
+    elif (any(e["state"] != "open" for e in envelopes)
+          or non_rent_total > non_rent_budget * elapsed_share):
+        mode = "TIGHT"
+    else:
+        mode = "NORMAL"
 
     rent = {"reserve": RENT_RESERVE,
             "posted": round(rent_posted, 2) if rent_posted > 0 else None,
