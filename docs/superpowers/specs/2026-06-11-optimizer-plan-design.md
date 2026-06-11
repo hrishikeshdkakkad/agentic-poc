@@ -78,7 +78,9 @@ Let `elapsed_days = today.day` (current month, today inclusive — matches `gami
   Goal flips to minimize overage and protect next month: all envelopes CLOSED except a
   survival-groceries floor (user-authored policy, below); "do not prebook next month" order.
 - **TIGHT** — not damage-control, but any envelope is `slow`/`closed` **or**
-  `total_spent > 2600 × elapsed_share`.
+  `(total_spent − rent_posted) > (2600 − RENT_RESERVE) × elapsed_share`. Pace is judged on
+  non-rent spend against the $750 — judging on the full total would flag TIGHT from the moment
+  rent posts (day ~4) until ~day 22 every month, which is noise, not signal.
 - **NORMAL** — everything else.
 
 Envelope states: `closed` (remaining ≤ 0), `slow` (spent > budget × elapsed_share — tolerance
