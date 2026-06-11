@@ -153,7 +153,7 @@ def build_directives(*, mode: str, target: float, committed: float,
                     f"{ENV_LABEL[e['key']]}: SLOW — max ${e['weekly_allowance']}/week "
                     f"for the rest of {month_name}.",
                     f"${e['spent']:.0f} of ${e['budget']:.0f} gone with "
-                    f"{week['days_left']} days left in {month_name}", e["weekly_allowance"])
+                    f"{week['days_left']} days left in {month_name}", float(e["weekly_allowance"]))
 
     sub_budget = ENVELOPES["subscriptions"]
     if subs["total"] > sub_budget:
