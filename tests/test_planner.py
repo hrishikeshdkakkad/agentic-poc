@@ -207,4 +207,6 @@ def test_project_subscriptions_trailing_window_per_merchant():
 def test_plan_month_carries_projected_subs():
     rows = _june_rows() + _subs_rows()
     out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
-    assert out["plan"]["projected_subs_monthly"] == 190.0   # 180 + OpenAI Jun-7 20/2=10
+    # _subs_rows alone projects 180; the Jun-7 OpenAI charge in _june_rows
+    # lifts OpenAI from 20/2=10 to 40/2=20, so the total becomes 190.
+    assert out["plan"]["projected_subs_monthly"] == 190.0

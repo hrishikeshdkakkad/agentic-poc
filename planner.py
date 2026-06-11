@@ -46,6 +46,11 @@ def project_subscriptions(rows: list[dict], today: date) -> dict:
     Sum of subscriptions-classified spend over SUBS_WINDOW_DAYS, divided by
     the window length in months (60d → 2.0). Deterministic — no cadence
     heuristics; the kill-list needs names and sizes, not predictions.
+
+    Caveats for consumers: a monthly charge seen only once in the window
+    projects at HALF its true cost (estimate, not invoice); keys are raw
+    merchant strings (falling back to name), so the same service may appear
+    under two spellings across data sources.
     """
     start = today - timedelta(days=SUBS_WINDOW_DAYS - 1)
     months = SUBS_WINDOW_DAYS / 30.0
@@ -158,6 +163,7 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
     week = {"days_left": days_left, "weeks_left": weeks_left}
     no_spend_days = max(0, day - len(spend_days))  # consumed by build_directives (Task 6)
 
+    # Past/future months anchor the window at month-end (final-day snapshot).
     subs = project_subscriptions(rows, today if in_month else ms.replace(day=dim))
     subs_total = subs["total"]
     directives: list[dict] = []  # Task 5 replaces this line with build_directives
