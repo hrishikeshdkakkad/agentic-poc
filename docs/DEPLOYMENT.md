@@ -78,6 +78,18 @@ claude mcp add --transport http personal-finance \
   "$MCP_REMOTE_URL" --header "Authorization: Bearer $MCP_AUTH_TOKEN"
 ```
 
+For **claude.ai custom connectors** (web, mobile app, Cowork) — which
+support OAuth or no auth but never custom headers — add the path-secret
+form of the URL as an *unauthenticated* connector instead:
+
+```
+https://<function-url-host>/t/$MCP_AUTH_TOKEN/mcp
+```
+
+The gate validates the path segment (constant time) and strips it before
+the MCP app sees the request. The URL itself is the credential — share it
+nowhere, and rotate `MCP_AUTH_TOKEN` to revoke it.
+
 Expect ~5-7s on the first call after idle (cold start); warm history-tool
 calls run in ~100-200ms when Lambda and Postgres share a region.
 
