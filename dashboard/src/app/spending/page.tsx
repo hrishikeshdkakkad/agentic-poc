@@ -42,7 +42,9 @@ export default function SpendingPage() {
     comparePair ? { period_a: comparePair.a, period_b: comparePair.b } : {});
 
   // Pivot monthly category rows into one object per month, keeping the top
-  // categories as series and folding the tail into OTHER.
+  // categories as series and folding the tail into one bucket. The bucket name
+  // must not collide with a real category (Plaid has a literal "OTHER").
+  const FOLD = "(everything else)";
   const { chartData, series } = useMemo(() => {
     const rows = monthly.data?.rows ?? [];
     const catTotals = new Map<string, number>();
@@ -52,14 +54,14 @@ export default function SpendingPage() {
     const byMonth = new Map<string, Record<string, number | string>>();
     for (const r of rows) {
       const m = byMonth.get(r.month!) ?? { month: r.month! };
-      const key = topSet.has(r.category!) ? r.category! : "OTHER";
+      const key = topSet.has(r.category!) ? r.category! : FOLD;
       m[key] = ((m[key] as number) ?? 0) + r.total;
       byMonth.set(r.month!, m);
     }
-    const hasOther = rows.some((r) => !topSet.has(r.category!));
+    const hasFold = rows.some((r) => !topSet.has(r.category!));
     return {
       chartData: [...byMonth.values()].sort((a, b) => String(a.month).localeCompare(String(b.month))),
-      series: hasOther ? [...top, "OTHER"] : top,
+      series: hasFold ? [...top, FOLD] : top,
     };
   }, [monthly.data]);
 
@@ -86,7 +88,7 @@ export default function SpendingPage() {
         {monthly.data ? (
           chartData.length
             ? <StackedMonthlyBars data={chartData} series={series}
-                onBarClick={(cat) => cat !== "OTHER" &&
+                onBarClick={(cat) => cat !== FOLD &&
                   router.push(`/transactions?category=${encodeURIComponent(cat)}&start_date=${start_date}`)} />
             : <div className="text-mut">No spending in this window.</div>
         ) : monthly.error ? null : <Loading />}

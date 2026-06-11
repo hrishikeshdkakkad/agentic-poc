@@ -21,7 +21,7 @@ const NAV: Array<[string, string]> = [
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen antialiased">
         <div className="flex min-h-screen">
           <aside className="w-52 shrink-0 border-r border-line p-4">
