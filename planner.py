@@ -110,7 +110,7 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
             "state": state,
         })
 
-    committed = total + (RENT_RESERVE if rent_posted <= 0 else 0.0)
+    committed = total + (RENT_RESERVE if rent_posted <= 0 else 0.0)  # rent_posted ≥ 0 always (is_expense drops refunds)
     non_rent_total = total - rent_posted
     non_rent_budget = target - RENT_RESERVE
     if committed >= target:

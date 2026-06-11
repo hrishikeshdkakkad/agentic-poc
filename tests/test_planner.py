@@ -170,3 +170,10 @@ def test_empty_rows_is_a_clean_normal_plan():
     assert p["total_spent"] == 0.0
     assert all(e["state"] == "open" and e["remaining"] == e["budget"] for e in p["envelopes"])
     assert p["rent"]["status"] == "reserved"
+
+
+def test_mode_damage_control_at_exact_target():
+    # 750 non-rent + 1850 unposted reserve = exactly 2600 → DC boundary is inclusive
+    rows = [_row(date(2026, 6, 3), 750.0)]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 5))
+    assert out["plan"]["mode"] == "DAMAGE_CONTROL"
