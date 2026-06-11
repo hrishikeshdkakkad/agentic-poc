@@ -158,6 +158,7 @@ Try "list my accounts" to confirm.
 
 For a deployment you can use from anywhere:
 
+- **AWS Lambda** (this fork's setup, ~$0/month): `./deploy/build_lambda.sh && ./deploy/deploy.sh`, then prove it with `python verify_remote.py` — stateless streamable HTTP behind a bearer-gated Function URL. Full walkthrough in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 - **Docker** (included): `docker build -t personal-finance-mcp . && docker run --rm -p 8000:8000 --env-file .env personal-finance-mcp`
 - **Any Python host** (Fly.io, Railway, Raspberry Pi + Tailscale, a VPS): set the env vars from `.env.example`, expose `/mcp` over HTTPS, gate it with auth.
 - **Prefect Horizon** (what the author uses — $0 recurring cost): see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full walkthrough.

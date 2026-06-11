@@ -24,6 +24,63 @@ docker run --rm -p 8000:8000 --env-file .env personal-finance-mcp
 
 `link_helper.py` is deliberately **not** copied into the image — it's a local-only tool for obtaining access tokens and must never run in a deployment. If you expose the container publicly, put an auth proxy in front (Caddy + OAuth, Cloudflare Access, nginx with basic auth, etc.).
 
+## AWS Lambda (fully remote, ~$0/month — this fork's deployment)
+
+A public HTTPS MCP endpoint with no idle cost: Lambda's always-free tier
+(1M requests + 400k GB-seconds/month) covers single-user MCP traffic
+entirely, the Function URL provides free HTTPS, and there is no API
+Gateway, VPC, NAT, or load balancer. CloudWatch logs are capped at 30 days.
+
+Architecture:
+
+```
+Claude agent ──Authorization: Bearer──▶ Lambda Function URL (free HTTPS)
+    └─▶ Mangum (event→ASGI) ─▶ bearer gate ─▶ FastMCP stateless http app
+            └─▶ Postgres (history + Fernet-encrypted plaid_tokens)
+            └─▶ Plaid API (live tools)
+```
+
+Key choices (see `lambda_app.py`):
+
+- `stateless_http=True` — every JSON-RPC POST is self-contained, so requests
+  can land on any Lambda container; no session affinity exists or is needed.
+- `json_response=True` — plain JSON instead of SSE, so a buffered Function
+  URL never holds a stream open.
+- Token ciphertext is read from `plaid_tokens` in `DATABASE_URL`; only the
+  function's `FERNET_KEY` env var can decrypt it. The database alone still
+  reveals nothing. If you use the `PFM_TOKENS_DATABASE_URL` split locally,
+  copy ciphertext rows up first (and re-run after linking any new bank):
+  `python deploy/migrate_tokens_to_neon.py`.
+
+Deploy (idempotent; requires AWS CLI credentials):
+
+```bash
+./deploy/build_lambda.sh     # zip: manylinux aarch64 wheels + app modules
+./deploy/deploy.sh           # IAM role + function + URL; prints endpoint
+python verify_remote.py      # drives all 28 tools through the live endpoint
+```
+
+`deploy.sh` generates `MCP_AUTH_TOKEN` on first run and persists it (plus
+`MCP_REMOTE_URL`) into `.env`. Every request must send
+`Authorization: Bearer $MCP_AUTH_TOKEN`; only `GET /health` is open. To
+rotate the token, change it in `.env` and re-run `deploy.sh`.
+
+> **AWS gotcha (October 2025 change):** public Function URLs now require
+> *two* resource-policy statements — `lambda:InvokeFunctionUrl` (authtype
+> NONE) **and** `lambda:InvokeFunction` with the `InvokedViaFunctionUrl`
+> condition. With only the first, every request 403s before reaching your
+> code. `deploy.sh` adds both.
+
+Connect a client:
+
+```bash
+claude mcp add --transport http personal-finance \
+  "$MCP_REMOTE_URL" --header "Authorization: Bearer $MCP_AUTH_TOKEN"
+```
+
+Expect ~5-7s on the first call after idle (cold start); warm history-tool
+calls run in ~100-200ms when Lambda and Postgres share a region.
+
 ## Prefect Horizon
 
 The author's setup. Free tier with scale-to-zero, OAuth 2.1 built in, ~$0 recurring cost. Trade-off: 20-60s cold start after idle.

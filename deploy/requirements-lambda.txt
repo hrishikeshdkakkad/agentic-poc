@@ -1,0 +1,18 @@
+# Exact pins matching the locally-tested .venv (see deploy/build_lambda.sh).
+# uvicorn/fastapi are deliberately absent: the Lambda path serves ASGI via
+# Mangum, and link_helper.py (the only FastAPI user) never deploys.
+#
+# plaid-python is NOT here: it publishes no wheel (sdist-only, pure Python),
+# so build_lambda.sh installs it in a second, native pass with --no-deps.
+# Its dependencies are pinned below so phase 1 resolves them as wheels.
+fastmcp==3.4.2
+mcp==1.27.2
+# 3.3.x binary wheels skip manylinux2014_aarch64; 3.2.13 is the newest with one
+psycopg[binary]==3.2.13
+cryptography==48.0.1
+python-dotenv==1.2.2
+mangum==0.21.0
+# plaid-python deps
+nulltype==2.3.1
+python-dateutil==2.9.0.post0
+urllib3==2.7.0

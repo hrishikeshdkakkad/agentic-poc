@@ -2,6 +2,9 @@
 .env.local
 *.secret
 tokens.txt
+deploy/build/
+deploy/lambda.zip
+deploy/.create-err
 __pycache__/
 *.pyc
 .venv/
