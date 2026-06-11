@@ -7,8 +7,10 @@ Never deploy this — it assumes a trusted localhost, like `link_helper` itself.
 
 Requires both backends:
 
-    .venv/bin/python server.py                      # MCP server, :8000
-    .venv/bin/uvicorn link_helper:app --port 8765   # Plaid Link / sync / CSV
+    .venv/bin/uvicorn asgi:app --port 8000 --reload   # MCP server
+    .venv/bin/uvicorn link_helper:app --port 8765     # Plaid Link / sync / CSV
+
+(or as launchd jobs — plists in `deploy/launchd/`)
 
 Then:
 

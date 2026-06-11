@@ -11,8 +11,12 @@ A self-hosted, **read-only**, **single-tenant** personal-finance MCP server (Fas
 ```bash
 .venv/bin/python -m pytest -q                      # full suite (pytest.ini sets testpaths=tests)
 .venv/bin/python -m pytest tests/test_server.py -k name   # single test
-.venv/bin/python server.py                          # MCP server → http://localhost:8000/mcp (no hot reload — restart after edits)
-.venv/bin/uvicorn link_helper:app --port 8765       # local dashboard: Plaid Link, sync-now, Apple Card CSV upload
+.venv/bin/uvicorn asgi:app --port 8000 --reload     # MCP server → http://localhost:8000/mcp (asgi.py wraps server.py for hot reload)
+.venv/bin/python server.py                          # MCP server, no hot reload (legacy; prefer asgi:app — a stale long-running process serves old code)
+.venv/bin/uvicorn link_helper:app --port 8765       # local link dashboard: Plaid Link, sync-now, Apple Card CSV upload
+cd dashboard && npm run dev                         # Next.js drill-down UI → http://localhost:3000 (needs both servers above)
+cd dashboard && npm test                            # dashboard vitest suite; tests/test_dashboard_contract.py guards the tool allowlist
+
 .venv/bin/python sync.py                            # manual sync (same code path as the sync_now tool)
 .venv/bin/python verify_remote.py                   # prove the deployed Lambda works (all tools, auth negatives)
 ```
@@ -23,6 +27,17 @@ DB-backed tests need Postgres at `postgresql://finance:finance@127.0.0.1:5433/fi
 
 - The `db` fixture **silently skips** when Postgres is unreachable — a green run may have skipped every DB test. CI has a reachability pre-check for this reason.
 - The fixture **TRUNCATEs all tables**. Never point `TEST_DATABASE_URL` at a real database.
+
+### Local process management
+
+Both local servers are meant to run as launchd agents with uvicorn `--reload`
+(plists tracked in `deploy/launchd/`): `com.personal-finance-mcp.dashboard`
+(link_helper, :8765) and `com.personal-finance-mcp.server` (MCP via asgi.py,
+:8000). Install: copy the plist to `~/Library/LaunchAgents/`, then
+`launchctl bootstrap gui/$UID <plist>` and `launchctl kickstart -k gui/$UID/<label>`.
+The plists exec the Homebrew python binary directly with PYTHONPATH pointing at
+the venv — see the comment inside them before "simplifying" (TCC denies exec
+through the .venv symlink under ~/Documents).
 
 ### Deploy
 
