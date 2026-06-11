@@ -53,3 +53,67 @@ def test_classify_pattern_false_positive_guards():
     assert planner.classify("GOOGLE *YOUTUBEPREMIUM", "Google") == "subscriptions"
     assert planner.classify("PATEL BROTHERS", "Patel Brothers") == "indian"
     assert planner.classify("DESI BAZAAR", "Desi Bazaar") == "indian"
+
+
+# ---- plan_month: envelope accounting ----------------------------------------
+
+def _row(d, amt, cp="FOOD_AND_DRINK", merch="Cafe", name="CAFE"):
+    return {"date": d, "amount": amt, "category_primary": cp, "merchant": merch, "name": name}
+
+
+def _june_rows():
+    """June 2026 fixture, viewed from Jun 11: rent posted + a bit of each envelope."""
+    return [
+        _row(date(2026, 6, 4), 1812.80, "OTHER", "Ett*applejackllcrent", "RENT"),
+        _row(date(2026, 6, 5), 50.0, "GENERAL_MERCHANDISE", "Walmart", "WALMART GROCERY"),
+        _row(date(2026, 6, 6), 40.0, "FOOD_AND_DRINK", "Namaste Indian Grocery", "NAMASTE"),
+        _row(date(2026, 6, 7), 20.0, "GENERAL_SERVICES", "OpenAI", "OPENAI *CHATGPT"),
+        _row(date(2026, 6, 8), 100.0, "FOOD_AND_DRINK", "Cafe", "CAFE"),
+    ]
+
+
+def test_plan_month_envelope_accounting_and_week_math():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    p = out["plan"]
+    assert p["month"] == "2026-06"
+    assert p["total_spent"] == 2022.80
+    assert p["headroom"] == round(2600 - 2022.80, 2)
+    assert p["week"] == {"days_left": 20, "weeks_left": 3}
+    env = {e["key"]: e for e in p["envelopes"]}
+    assert env["walmart"]["spent"] == 50.0
+    assert env["walmart"]["remaining"] == 180.0
+    assert env["walmart"]["weekly_allowance"] == 60          # floor(180/3)
+    assert env["indian"]["weekly_allowance"] == 46           # floor(140/3)
+    assert env["subscriptions"]["weekly_allowance"] == 43    # floor(130/3)
+    assert env["other"]["weekly_allowance"] == 30            # floor(90/3)
+
+
+def test_plan_month_rent_posted_under_reserve_is_buffer_not_redistributed():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    p = out["plan"]
+    assert p["rent"] == {"reserve": 1850.0, "posted": 1812.80, "status": "posted"}
+    # buffer is NOT redistributed: envelope budgets stay exactly CONFIG values
+    assert [e["budget"] for e in p["envelopes"]] == [230.0, 180.0, 150.0, 190.0]
+
+
+def test_plan_month_rent_unposted_is_reserved():
+    rows = [_row(date(2026, 6, 2), 30.0)]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 3))
+    assert out["plan"]["rent"] == {"reserve": 1850.0, "posted": None, "status": "reserved"}
+
+
+def test_plan_month_ignores_other_months_and_non_expenses():
+    rows = _june_rows() + [
+        _row(date(2026, 5, 20), 999.0),                                  # other month
+        _row(date(2026, 6, 9), 700.0, "TRANSFER_OUT", "Vault", "Wedding Vault"),  # not an expense
+    ]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    assert out["plan"]["total_spent"] == 2022.80
+
+
+def test_weekly_allowance_self_corrects_after_overspend():
+    rows = _june_rows()
+    rows[1] = _row(date(2026, 6, 5), 100.0, "GENERAL_MERCHANDISE", "Walmart", "WALMART GROCERY")
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    env = {e["key"]: e for e in out["plan"]["envelopes"]}
+    assert env["walmart"]["weekly_allowance"] == 43          # floor(130/3) — shrank from 60

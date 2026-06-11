@@ -58,3 +58,72 @@ def classify(name: str | None, merchant: str | None) -> str:
     if any(p in hay for p in _INDIAN):
         return "indian"
     return "other"
+
+
+def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
+    """Plan one month against the envelopes.
+
+    rows are ALL transactions (any month — the subscription projection needs
+    trailing history); ms is the month to plan; today bounds month-to-date
+    math for the live month. Returns {"plan": {...}, "directives": [...]}.
+    """
+    today = today or date.today()
+    target = gamify.MONTHLY_TARGET
+    dim = calendar.monthrange(ms.year, ms.month)[1]
+    in_month = (today.year, today.month) == (ms.year, ms.month)
+    day = min(today.day, dim) if in_month else dim
+    elapsed_share = day / dim
+    days_left = dim - day + 1
+    weeks_left = max(1, math.ceil(days_left / 7))
+
+    total = 0.0
+    rent_posted = 0.0
+    spent = {k: 0.0 for k in ENVELOPES}
+    spend_days: set = set()
+    for r in rows:
+        d = r.get("date")
+        if d is None or (d.year, d.month) != (ms.year, ms.month):
+            continue
+        if not gamify.is_expense(r.get("category_primary"), r.get("name"),
+                                 r.get("merchant"), r.get("amount")):
+            continue
+        amt = float(r["amount"])
+        total += amt
+        spend_days.add(d)
+        env = classify(r.get("name"), r.get("merchant"))
+        if env == "rent":
+            rent_posted += amt
+        else:
+            spent[env] += amt
+
+    envelopes = []
+    for key, budget in ENVELOPES.items():
+        used = round(spent[key], 2)
+        remaining = round(budget - used, 2)
+        state = ("closed" if remaining <= 0
+                 else "slow" if used > budget * elapsed_share
+                 else "open")
+        envelopes.append({
+            "key": key, "budget": budget, "spent": used, "remaining": remaining,
+            "weekly_allowance": math.floor(max(0.0, remaining) / weeks_left),
+            "state": state,
+        })
+
+    mode = "NORMAL"            # Task 3 replaces this line with real mode logic
+
+    rent = {"reserve": RENT_RESERVE,
+            "posted": round(rent_posted, 2) if rent_posted > 0 else None,
+            "status": "posted" if rent_posted > 0 else "reserved"}
+    week = {"days_left": days_left, "weeks_left": weeks_left}
+    no_spend_days = max(0, day - len(spend_days))
+
+    subs_total = 0.0           # Task 4 replaces this line with project_subscriptions
+    directives: list[dict] = []  # Task 5 replaces this line with build_directives
+
+    plan = {
+        "month": ms.isoformat()[:7], "mode": mode, "target": target,
+        "total_spent": round(total, 2), "headroom": round(target - total, 2),
+        "rent": rent, "envelopes": envelopes, "week": week,
+        "projected_subs_monthly": subs_total,
+    }
+    return {"plan": plan, "directives": directives}
