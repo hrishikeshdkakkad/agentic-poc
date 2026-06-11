@@ -74,7 +74,7 @@ Env via `dashboard/.env.local` (optional overrides): `MCP_URL` (default
 | `/investments` | Holdings table (qty, price, value, cost basis, gain), allocation donut, portfolio analysis, recent investment transactions | `get_investment_holdings`, `get_portfolio_analysis`, `get_investment_transactions` |
 | `/debt` | Liabilities by account (APR, min payment, due, overdue), payoff-schedule simulator with monthly-payment input | `get_liabilities`, `get_debt_analysis` |
 | `/cash-flow` | Income analysis by month/source; recurring streams with cadence/next-expected; recurring analysis | `get_income_analysis`, `get_recurring_analysis`, `get_recurring_transactions` |
-| `/connections` | Port of the existing UI: institutions + link health badges, Plaid Link (new + re-auth update mode), Sync now with result detail, Apple Card CSV upload | link_helper proxy endpoints |
+| `/connections` | Port of the existing UI: institutions + link health badges, Plaid Link (new links), Sync now with result detail, Apple Card CSV upload. Re-auth stays the documented curl flow — the raw access token never reaches a browser, and `link_helper` is unmodified. | link_helper proxy endpoints |
 
 A merchant drawer (opened from transactions/spending rows) shows `get_merchant_profile`.
 
