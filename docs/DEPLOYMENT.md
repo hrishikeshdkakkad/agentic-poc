@@ -71,6 +71,16 @@ rotate the token, change it in `.env` and re-run `deploy.sh`.
 > condition. With only the first, every request 403s before reaching your
 > code. `deploy.sh` adds both.
 
+### CI/CD (GitHub Actions)
+
+`.github/workflows/ci.yml` runs tests + builds the zip on every PR, and on
+pushes to `main` deploys that exact artifact via the OIDC role
+`personal-finance-mcp-github-deploy` (no AWS keys in GitHub) and smoke-checks
+the live endpoint (`/health` + authenticated `tools/list ≥ 28`). Code-only:
+env/config changes still deploy from a laptop with `./deploy/deploy.sh`,
+where `.env` and the Fernet keyfile live. Repo secrets used: `AWS_ROLE_ARN`,
+`MCP_REMOTE_URL`, `MCP_AUTH_TOKEN`.
+
 Connect a client:
 
 ```bash
