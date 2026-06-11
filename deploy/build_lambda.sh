@@ -8,12 +8,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# CI runners have no .venv; point PIP at their interpreter's pip instead.
+PIP="${PIP:-.venv/bin/pip}"
+
 BUILD=deploy/build
 ZIP=deploy/lambda.zip
 rm -rf "$BUILD" "$ZIP"
 mkdir -p "$BUILD"
 
-.venv/bin/pip install \
+"$PIP" install \
     --quiet \
     --platform manylinux2014_aarch64 \
     --platform manylinux_2_17_aarch64 \
@@ -25,7 +28,7 @@ mkdir -p "$BUILD"
 
 # plaid-python is sdist-only (pure Python), which pip refuses to resolve
 # cross-platform; install it natively without deps (deps pinned in phase 1).
-.venv/bin/pip install --quiet --target "$BUILD" --no-deps plaid-python==39.2.0
+"$PIP" install --quiet --target "$BUILD" --no-deps plaid-python==39.2.0
 
 # App modules only. link_helper.py (local-only Plaid Link helper) and
 # sandbox_link.py must never ship; .env is excluded by construction.
