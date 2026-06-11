@@ -110,7 +110,13 @@ def _next_month_first(ms: date) -> date:
 def build_directives(*, mode: str, target: float, committed: float,
                      envelopes: list[dict], rent: dict, subs: dict,
                      week: dict, no_spend_days: int, ms: date) -> list[dict]:
-    """Ordered, hard-language orders. Severity: stop > slow > act > info."""
+    """Ordered, hard-language orders. Severity: stop > slow > act > info.
+
+    The kill-list runs in every mode, including DAMAGE_CONTROL where it
+    follows "Subscriptions: CLOSED" — not a contradiction: CLOSED stops this
+    month's spending; cancellations shrink NEXT month's bill, which is the
+    DC goal ("protect next month").
+    """
     out: list[dict] = []
     by_key = {e["key"]: e for e in envelopes}
     nxt = _next_month_first(ms)
@@ -136,17 +142,17 @@ def build_directives(*, mode: str, target: float, committed: float,
         for key in ("walmart", "indian"):
             add("slow", key,
                 f"Survival groceries only: {ENV_LABEL[key]} ≤ ${floor[key]:.0f}/week.",
-                "eat from the pantry first", floor[key])
+                "eat from the pantry first", float(floor[key]))
     else:
         for e in envelopes:
             if e["state"] == "closed":
                 add("stop", e["key"], f"{ENV_LABEL[e['key']]}: CLOSED until {nxt_label}.",
-                    f"${e['spent']:.2f} spent of ${e['budget']:.0f} — envelope empty")
+                    f"${e['spent']:.0f} spent of ${e['budget']:.0f} — envelope empty")
             elif e["state"] == "slow":
                 add("slow", e["key"],
                     f"{ENV_LABEL[e['key']]}: SLOW — max ${e['weekly_allowance']}/week "
                     f"for the rest of {month_name}.",
-                    f"${e['spent']:.2f} of ${e['budget']:.0f} gone with "
+                    f"${e['spent']:.0f} of ${e['budget']:.0f} gone with "
                     f"{week['days_left']} days left in {month_name}", e["weekly_allowance"])
 
     sub_budget = ENVELOPES["subscriptions"]
@@ -160,6 +166,10 @@ def build_directives(*, mode: str, target: float, committed: float,
             running -= monthly
             if running <= sub_budget:
                 break
+        if running > sub_budget:
+            add("act", "subscriptions",
+                f"Audit subscriptions — projected ${subs['total']:.0f}/mo vs ${sub_budget:.0f} envelope.",
+                "no single cancellation closes the gap; review manually")
 
     if rent["status"] == "reserved":
         add("act", None,

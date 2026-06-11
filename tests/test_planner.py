@@ -297,3 +297,11 @@ def test_weekly_shopping_orders_in_non_damage_modes():
 def test_no_spend_day_nudge_present():
     out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
     assert any("no-spend day" in d["order"] for d in out["directives"])
+
+
+def test_rent_posted_over_reserve_is_flagged():
+    rows = [r for r in _june_rows() if r["amount"] != 1812.80]
+    rows.append(_row(date(2026, 6, 4), 1900.0, "OTHER", "Ett*applejackllcrent", "RENT"))
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    assert any("over reserve" in d["order"] for d in out["directives"]
+               if d["order"].startswith("Rent posted"))
