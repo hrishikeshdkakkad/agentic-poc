@@ -107,6 +107,14 @@ for round_ in (1, 2):
     check(f"tools/list invocation #{round_} (lifespan re-entry)",
           status == 200 and len(tools) == 28, f"status={status} tools={len(tools)}")
 
+status, body = invoke(fn_url_event("POST", f"/t/{TOKEN}/mcp", rpc("tools/list", id_=4)))
+tools = body.get("result", {}).get("tools", []) if isinstance(body, dict) else []
+check("path-secret URL accepted (claude.ai connector path)",
+      status == 200 and len(tools) == 28, f"status={status} tools={len(tools)}")
+
+status, _ = invoke(fn_url_event("POST", "/t/wrong-secret/mcp", rpc("tools/list", id_=5)))
+check("wrong path-secret rejected", status == 401)
+
 status, body = invoke(fn_url_event("POST", "/mcp", rpc("tools/call", {
     "name": "get_sync_status", "arguments": {},
 }, id_=3), auth=good))

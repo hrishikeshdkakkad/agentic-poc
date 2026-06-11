@@ -47,7 +47,15 @@ async def _send_plain(send, status: int, body: bytes,
 
 
 class BearerGate:
-    """ASGI wrapper enforcing a constant-time bearer-token check."""
+    """ASGI wrapper enforcing a constant-time secret check, two ways in:
+
+    1. ``Authorization: Bearer <MCP_AUTH_TOKEN>`` on any path — for clients
+       that support custom headers (Claude Code, Agent SDK, mcp add).
+    2. The secret as a path prefix, ``/t/<MCP_AUTH_TOKEN>/mcp`` — for
+       claude.ai custom connectors (web/mobile/Cowork), whose UI supports
+       only URL + OAuth, never custom headers. The URL is the credential;
+       the prefix is stripped before the request reaches the MCP app.
+    """
 
     def __init__(self, app) -> None:
         self.app = app
@@ -56,9 +64,22 @@ class BearerGate:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        if scope.get("path") == "/health":
+        path = scope.get("path", "")
+        if path == "/health":
             await _send_plain(send, 200, b'{"ok": true}')
             return
+
+        if path.startswith("/t/"):
+            segment, _, rest = path[3:].partition("/")
+            if secrets.compare_digest(segment.encode(), _AUTH_TOKEN.encode()):
+                inner = dict(scope)
+                inner["path"] = f"/{rest}" if rest else "/"
+                inner["raw_path"] = inner["path"].encode()
+                await self.app(inner, receive, send)
+                return
+            await _send_plain(send, 401, b'{"error": "unauthorized"}')
+            return
+
         supplied = b""
         for key, value in scope.get("headers") or []:
             if key == b"authorization":
