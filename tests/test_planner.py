@@ -224,3 +224,10 @@ def test_survival_policy_contract():
             # survival ≠ normal life: combined floor stays under the normal weekly pace
             assert floor["walmart"] + floor["indian"] <= (
                 planner.ENVELOPES["walmart"] + planner.ENVELOPES["indian"]) / 4 * 1.5
+
+
+def test_survival_policy_tapers_with_overage_but_never_starves():
+    # no overage → full floor; June-2026-like overage (3 squeezes) → hard floor
+    assert planner.survival_weekly_groceries(3, 0.0) == {"walmart": 50.0, "indian": 30.0}
+    assert planner.survival_weekly_groceries(3, 1836.20) == {"walmart": 30.0, "indian": 15.0}
+    assert planner.survival_weekly_groceries(1, 50000.0) == {"walmart": 30.0, "indian": 15.0}

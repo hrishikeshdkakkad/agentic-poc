@@ -41,16 +41,15 @@ ENV_LABEL = {"walmart": "Walmart", "indian": "Indian store",
 
 
 def survival_weekly_groceries(weeks_left: int, overage: float) -> dict[str, float]:
-    """USER POLICY — the weekly grocery floor during DAMAGE_CONTROL.
+    """USER POLICY: deeper hole, tighter belt — squeeze 25% per $500 of
+    overage, but never starve below a hard floor ($30 Walmart / $15 Indian).
 
-    The month is already lost; every grocery dollar widens the loss, but you
-    still have to eat. Decide how: flat floor? taper as overage grows?
-    Walmart-only past some overage? Inputs: weeks_left in the month, overage
-    in dollars (committed − target, > 0). Returns weekly caps:
-    {"walmart": float, "indian": float}. Contract in
-    tests/test_planner.py::test_survival_policy_contract.
+    Called only in DAMAGE_CONTROL. overage = committed − target (> 0).
+    Contract in tests/test_planner.py::test_survival_policy_contract.
     """
-    return {"walmart": SURVIVAL_WEEKLY_WALMART, "indian": SURVIVAL_WEEKLY_INDIAN}
+    squeeze = 0.75 ** int(overage // 500)
+    return {"walmart": max(30.0, SURVIVAL_WEEKLY_WALMART * squeeze),
+            "indian": max(15.0, SURVIVAL_WEEKLY_INDIAN * squeeze)}
 
 
 def project_subscriptions(rows: list[dict], today: date) -> dict:
