@@ -5,7 +5,7 @@ import server as srv
 from plaid_client import ItemHealth, SecretStr
 
 
-def test_list_accounts_aggregates_across_items(fake_env_tokens):
+def test_list_accounts_aggregates_across_items(fake_env_tokens, db):
     fake_api = MagicMock()
     fake_api.accounts_get.return_value.to_dict.return_value = {
         "accounts": [
@@ -34,7 +34,7 @@ def test_list_accounts_aggregates_across_items(fake_env_tokens):
     assert out["warnings"][0]["status"] == "re_auth_required"
 
 
-def test_list_accounts_surfaces_api_exception_as_warning(fake_env_tokens):
+def test_list_accounts_surfaces_api_exception_as_warning(fake_env_tokens, db):
     from plaid.exceptions import ApiException
     fake_api = MagicMock()
     exc = ApiException(status=500, reason="boom")
@@ -57,6 +57,70 @@ def test_list_accounts_registered_as_mcp_tool():
     tools = asyncio.run(srv.mcp.list_tools())
     tool_names = {getattr(t, "name", None) for t in tools}
     assert "list_accounts" in tool_names
+
+
+def test_list_accounts_includes_manual_csv_accounts(fake_env_tokens, db):
+    # DB holds a Plaid-synced mirror row (CHASE — must not double-list) and a
+    # manually-imported account with no Plaid Item (APPLECARD — must appear).
+    db.execute(
+        "INSERT INTO accounts (account_id, item_key, institution, name, type, subtype, currency, updated_at) VALUES "
+        "('a1', 'CHASE', 'Chase', 'Checking', 'depository', 'checking', 'USD', now()), "
+        "('applecard_manual', 'APPLECARD', 'Apple Card', 'Apple Card', 'credit', 'credit card', 'USD', now())"
+    )
+    fake_api = MagicMock()
+    fake_api.accounts_get.return_value.to_dict.return_value = {
+        "accounts": [
+            {
+                "account_id": "a1",
+                "name": "Checking",
+                "mask": "0001",
+                "type": "depository",
+                "subtype": "checking",
+                "balances": {"current": 100, "available": 100, "iso_currency_code": "USD"},
+            },
+        ],
+    }
+    items = [("CHASE", SecretStr("t"), ItemHealth("CHASE", "healthy", "ins_3", "Chase"))]
+    with patch.object(srv, "build_api", return_value=fake_api), \
+         patch.object(srv, "all_items", return_value=items):
+        out = srv._list_accounts_impl()
+    by_id = {a["account_id"]: a for a in out["accounts"]}
+    assert set(by_id) == {"a1", "applecard_manual"}  # no Chase duplicate from DB
+    manual = by_id["applecard_manual"]
+    assert manual["source"] == "csv_import"
+    assert manual["institution"] == "Apple Card"
+    assert manual["handle"] == "applecard_creditcard"
+    assert manual["balance"]["current"] is None  # CSVs carry no balance
+    assert out["warnings"] == []
+
+
+def test_list_accounts_warns_when_db_unreachable(fake_env_tokens, monkeypatch):
+    # Plaid accounts must still come back; the DB miss surfaces as a warning,
+    # never a silent omission of manually-imported accounts.
+    import storage
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(storage, "open_readonly", boom)
+    fake_api = MagicMock()
+    fake_api.accounts_get.return_value.to_dict.return_value = {
+        "accounts": [
+            {
+                "account_id": "a1",
+                "name": "Checking",
+                "mask": "0001",
+                "type": "depository",
+                "subtype": "checking",
+                "balances": {"current": 100, "available": 100, "iso_currency_code": "USD"},
+            },
+        ],
+    }
+    items = [("CHASE", SecretStr("t"), ItemHealth("CHASE", "healthy", "ins_3", "Chase"))]
+    with patch.object(srv, "build_api", return_value=fake_api), \
+         patch.object(srv, "all_items", return_value=items):
+        out = srv._list_accounts_impl()
+    assert [a["account_id"] for a in out["accounts"]] == ["a1"]
+    assert len(out["warnings"]) == 1
+    assert out["warnings"][0]["status"] == "db_unavailable"
 
 
 def test_get_balances_no_filter_returns_all(fake_env_tokens):

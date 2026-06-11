@@ -26,6 +26,7 @@ from plaid_client import (
     ItemHealth,
     all_items,
     build_api,
+    make_handle,
     map_plaid_error,
     shape_account,
     shape_holding,
@@ -43,8 +44,67 @@ def _warning_from_health(h: ItemHealth) -> dict:
     }
 
 
+def _manual_accounts(plaid_keys: set[str], warnings: list[dict]) -> list[dict]:
+    """Accounts that exist only in the local DB (e.g. an Apple Card CSV import).
+
+    Manually-imported sources have no Plaid Item, so the live accounts_get
+    loop can never see them; surface them from the accounts table instead,
+    mirroring the dashboard's institutions list. CSVs carry no balance, so
+    the balance fields are null. A DB failure degrades to a warning rather
+    than silently omitting these accounts.
+    """
+    try:
+        conn = storage.open_readonly()
+        try:
+            rows = conn.execute(
+                "SELECT account_id, item_key, institution, name, official_name,"
+                " mask, type, subtype, currency FROM accounts"
+                " ORDER BY institution, name"
+            ).fetchall()
+            # Latest user-stated balance per account (set_manual_balance);
+            # accounts without one keep null balances.
+            manual_balances = {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT DISTINCT ON (account_id) account_id, current"
+                    " FROM balance_snapshots"
+                    " ORDER BY account_id, snapshot_date DESC"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+    except Exception as e:
+        warnings.append({
+            "institution": "manual imports",
+            "status": "db_unavailable",
+            "reason": f"manually-imported accounts omitted: {e}",
+        })
+        return []
+    return [
+        {
+            "handle": make_handle(institution or item_key, subtype or type_ or "", mask),
+            "account_id": account_id,
+            "institution": institution,
+            "name": name,
+            "official_name": official_name,
+            "mask": mask,
+            "type": type_,
+            "subtype": subtype,
+            "balance": {"current": manual_balances.get(account_id),
+                        "available": None, "limit": None,
+                        "currency": currency},
+            "source": "csv_import",
+        }
+        for account_id, item_key, institution, name, official_name,
+            mask, type_, subtype, currency in rows
+        if item_key not in plaid_keys
+    ]
+
+
 def _list_accounts_impl() -> dict:
     """List every account across all linked Items, with balances.
+
+    Includes manually-imported accounts (e.g. Apple Card CSV) from the local
+    DB, marked source="csv_import" with null balances.
 
     Returns:
         {"accounts": [...], "warnings": [...]}. Warnings describe Items that
@@ -53,7 +113,9 @@ def _list_accounts_impl() -> dict:
     api = build_api()
     accounts: list[dict] = []
     warnings: list[dict] = []
+    plaid_keys: set[str] = set()
     for env_key, token, health in all_items(api):
+        plaid_keys.add(env_key)
         if health.status != "healthy":
             warnings.append(_warning_from_health(health))
             continue
@@ -66,6 +128,7 @@ def _list_accounts_impl() -> dict:
         except ApiException as e:
             mapped = map_plaid_error(e, health.institution_name)["error"]
             warnings.append({"institution": health.institution_name, **mapped})
+    accounts.extend(_manual_accounts(plaid_keys, warnings))
     return {"accounts": accounts, "warnings": warnings}
 
 
@@ -595,7 +658,27 @@ def _get_net_worth_impl() -> dict:
     holdings market value.
     """
     live = _get_balances_impl()
-    out = analytics.compose_net_worth(live["accounts"])
+    # Manual accounts with a user-stated balance (set_manual_balance) count
+    # too; ones without stay balance-null and compose_net_worth skips them.
+    # "Manual" = item has no sync cursor, the same rule record_manual_balance
+    # enforces — Plaid-mirrored accounts are excluded even when their Item is
+    # temporarily unhealthy, so a stale snapshot never substitutes for live.
+    try:
+        conn = storage.open_readonly()
+        try:
+            synced_keys = {r[0] for r in conn.execute(
+                "SELECT item_key FROM sync_state").fetchall()}
+        finally:
+            conn.close()
+    except Exception as e:
+        synced_keys = None
+        live["warnings"].append({
+            "institution": "manual imports",
+            "status": "db_unavailable",
+            "reason": f"manual accounts omitted from net worth: {e}",
+        })
+    manual = _manual_accounts(synced_keys, live["warnings"]) if synced_keys is not None else []
+    out = analytics.compose_net_worth(live["accounts"] + manual)
     out["warnings"] = live["warnings"]
     return out
 
@@ -780,6 +863,28 @@ get_optimizer_score = mcp.tool(
     annotations={"readOnlyHint": True, "title": "Optimizer Score"},
     name="get_optimizer_score",
 )(_get_optimizer_score_impl)
+
+
+def _get_optimizer_plan_impl() -> dict:
+    """Decide the month: envelope plan + hard orders from local history — zero Plaid calls.
+
+    The scoreboard's prescriptive twin. Rent ($1,850) is committed on day 1;
+    four envelopes split the remaining $750 — walmart groceries, indian-store
+    groceries, subscriptions, everything else. Returns the month's plan (mode:
+    NORMAL/TIGHT/DAMAGE_CONTROL, envelope burn-down with self-correcting
+    weekly allowances, rent watch, projected subscription cost) plus ordered
+    directives: STOP orders for empty envelopes, a largest-first subscription
+    kill-list, survival grocery floors when the month is already lost.
+    Recomputed from transactions every call. See planner.py.
+    """
+    import planner
+    return planner.load_plan()
+
+
+get_optimizer_plan = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Optimizer Plan"},
+    name="get_optimizer_plan",
+)(_get_optimizer_plan_impl)
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1086,39 @@ set_category_override = mcp.tool(
     annotations={"title": "Set Category Override"},
     name="set_category_override",
 )(_set_category_override_impl)
+
+
+def _set_manual_balance_impl(account_id: str, current_balance: float,
+                             apr_percentage: float | None = None,
+                             minimum_payment: float | None = None) -> dict:
+    """Record today's real balance for a manually-imported account (no Plaid Item).
+
+    CSV imports (e.g. Apple Card) carry transactions but no balance, so those
+    accounts are invisible to debt and net-worth tools. This stores the
+    user-stated balance — read it from the issuer's app — as the same dated
+    snapshots the Plaid sync writes (balance_snapshots, plus
+    liabilities_snapshots with APR/minimum payment for credit/loan accounts),
+    so every balance-derived tool picks the account up. Re-entering the same
+    day overwrites; new days build history. Plaid-synced accounts are
+    rejected — their balances come from sync.
+    """
+    conn = storage.open_db()
+    try:
+        out = storage.record_manual_balance(
+            conn, account_id, current=current_balance,
+            apr_percentage=apr_percentage, minimum_payment=minimum_payment,
+        )
+    except ValueError as e:
+        return {"error": {"code": "INVALID_MANUAL_BALANCE", "message": str(e)}}
+    finally:
+        conn.close()
+    return out
+
+
+set_manual_balance = mcp.tool(
+    annotations={"title": "Set Manual Balance"},
+    name="set_manual_balance",
+)(_set_manual_balance_impl)
 
 
 def _list_category_overrides_impl() -> dict:

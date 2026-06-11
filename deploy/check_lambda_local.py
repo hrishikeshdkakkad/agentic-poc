@@ -1,7 +1,10 @@
 """Pre-deploy check: drive lambda_app.handler with synthetic Function URL
-events, exactly as AWS will. Run from the repo root:
+events, exactly as AWS will. A standalone script, NOT a pytest module — a
+test_ prefix would make pytest import it at collection, which both needs
+Lambda-only deps (mangum) and executes the simulation as a side effect.
+Run from the repo root:
 
-    MCP_AUTH_TOKEN=local-test .venv/bin/python deploy/test_lambda_local.py
+    MCP_AUTH_TOKEN=local-test .venv/bin/python deploy/check_lambda_local.py
 
 Asserts the auth gate (401 without/with-wrong token, /health open) and the
 MCP protocol over the buffered Lambda path (initialize, tools/list,

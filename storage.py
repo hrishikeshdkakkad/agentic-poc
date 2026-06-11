@@ -481,6 +481,81 @@ def apply_overrides(conn: psycopg.Connection) -> int:
     return cur.rowcount
 
 
+def record_manual_balance(
+    conn: psycopg.Connection,
+    account_id: str,
+    current: float,
+    apr_percentage: float | None = None,
+    minimum_payment: float | None = None,
+    snapshot_date: date | None = None,
+) -> dict:
+    """Record a user-stated balance for an account that has no Plaid Item.
+
+    CSV imports (e.g. Apple Card) carry transactions but no balance, leaving
+    the account invisible to every balance-derived tool. This writes the same
+    rows the Plaid sync writes — balance_snapshots, plus liabilities_snapshots
+    for credit/loan accounts — so debt and net-worth tools pick the account up
+    with no special-casing. Same-day re-entry overwrites (snapshot upsert
+    semantics, like sync); distinct days accumulate history.
+
+    Refuses Plaid-synced accounts (item_key present in sync_state): their
+    snapshots come from the institution and a manual row would be silently
+    overwritten — and disagree with — the next sync.
+    """
+    row = conn.execute(
+        "SELECT item_key, institution, type, subtype FROM accounts"
+        " WHERE account_id = %s", (account_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown account_id: {account_id}")
+    item_key, institution, acct_type, subtype = row
+    synced = conn.execute(
+        "SELECT 1 FROM sync_state WHERE item_key = %s", (item_key,)
+    ).fetchone()
+    if synced:
+        raise ValueError(
+            f"account {account_id} belongs to Plaid-synced item {item_key}; "
+            "its balances come from sync, not manual entry"
+        )
+
+    sd = (snapshot_date or date.today()).isoformat()
+    ts = _now()
+    is_liability = acct_type in ("credit", "loan")
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO balance_snapshots VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (snapshot_date, account_id) DO UPDATE SET
+                snapshot_ts = EXCLUDED.snapshot_ts,
+                current = EXCLUDED.current
+            """,
+            (sd, ts, account_id, item_key, institution, acct_type, subtype,
+             current, None, None, "USD"),
+        )
+        if is_liability:
+            liability_type = "credit" if acct_type == "credit" else "loan"
+            conn.execute(
+                """
+                INSERT INTO liabilities_snapshots VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (snapshot_date, account_id, liability_type) DO UPDATE SET
+                    snapshot_ts = EXCLUDED.snapshot_ts,
+                    outstanding_balance = EXCLUDED.outstanding_balance,
+                    apr_percentage = EXCLUDED.apr_percentage,
+                    minimum_payment_amount = EXCLUDED.minimum_payment_amount
+                """,
+                (sd, ts, account_id, item_key, liability_type,
+                 current, apr_percentage, None, minimum_payment, None, None, "USD"),
+            )
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "institution": institution,
+        "snapshot_date": sd,
+        "current": current,
+        "liability_recorded": is_liability,
+    }
+
+
 def get_cursor(conn: psycopg.Connection, item_key: str) -> str | None:
     row = conn.execute(
         "SELECT cursor FROM sync_state WHERE item_key = %s", (item_key,)
