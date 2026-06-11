@@ -231,3 +231,69 @@ def test_survival_policy_tapers_with_overage_but_never_starves():
     assert planner.survival_weekly_groceries(3, 0.0) == {"walmart": 50.0, "indian": 30.0}
     assert planner.survival_weekly_groceries(3, 1836.20) == {"walmart": 30.0, "indian": 15.0}
     assert planner.survival_weekly_groceries(1, 50000.0) == {"walmart": 30.0, "indian": 15.0}
+
+
+# ---- directives -----------------------------------------------------------------
+
+def _orders(out):
+    return [d["order"] for d in out["directives"]]
+
+
+def test_damage_control_directives_banner_prebook_survival():
+    rows = _june_rows() + [_row(date(2026, 6, 9), 2413.40, "TRAVEL", "Alamo Rent-a-car", "ALAMO")]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    orders = _orders(out)
+    assert any(o.startswith("DAMAGE CONTROL: June is lost") for o in orders)
+    assert "Do not prebook anything for July." in orders
+    assert any("Subscriptions: CLOSED until Jul 1." == o for o in orders)
+    assert any("Everything else: CLOSED until Jul 1." == o for o in orders)
+    assert any(o.startswith("Survival groceries only: Walmart") for o in orders)
+    assert any(o.startswith("Survival groceries only: Indian store") for o in orders)
+    # banner first, and it's a stop
+    assert out["directives"][0]["severity"] == "stop"
+
+
+def test_tight_directives_slow_order_with_weekly_cap():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    slows = [d for d in out["directives"] if d["severity"] == "slow"]
+    assert len(slows) == 1
+    assert slows[0]["envelope"] == "other"
+    assert "max $30/week" in slows[0]["order"]
+
+
+def test_closed_envelope_gets_stop_order():
+    rows = _june_rows() + [_row(date(2026, 6, 9), 200.0, "GENERAL_MERCHANDISE", "Walmart", "WALMART GROCERY")]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    assert out["plan"]["mode"] == "TIGHT"
+    assert "Walmart: CLOSED until Jul 1." in _orders(out)
+
+
+def test_kill_list_cuts_largest_first_until_it_fits():
+    rows = _june_rows() + _subs_rows()
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
+    cancels = [d for d in out["directives"] if d["order"].startswith("Cancel/downgrade")]
+    # projected 190 vs 150: cutting Claude.ai (150/mo) alone gets to 40 ≤ 150 — one cut
+    assert len(cancels) == 1
+    assert "Claude.ai" in cancels[0]["order"]
+    assert cancels[0]["severity"] == "act"
+
+
+def test_rent_watch_directives():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    assert any("banked as buffer" in d["order"] for d in out["directives"])
+    rows = [_row(date(2026, 6, 2), 30.0)]
+    out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 3))
+    assert any(d["order"].startswith("Rent not posted yet") for d in out["directives"])
+
+
+def test_weekly_shopping_orders_in_non_damage_modes():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    orders = _orders(out)
+    assert "This week: Walmart ≤ $60 (one trip), Indian store ≤ $46." in orders
+    # 'other' is slow (not open), so it gets the SLOW order, not a weekly order
+    assert not any(o.startswith("Everything else ≤ $") for o in orders)
+
+
+def test_no_spend_day_nudge_present():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 11))
+    assert any("no-spend day" in d["order"] for d in out["directives"])

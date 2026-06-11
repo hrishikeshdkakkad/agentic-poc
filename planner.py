@@ -47,7 +47,7 @@ def survival_weekly_groceries(weeks_left: int, overage: float) -> dict[str, floa
     Called only in DAMAGE_CONTROL. overage = committed − target (> 0).
     Contract in tests/test_planner.py::test_survival_policy_contract.
     """
-    squeeze = 0.75 ** int(overage // 500)
+    squeeze = 0.75 ** max(0, int(overage // 500))  # guard: negative overage must not loosen the belt
     return {"walmart": max(30.0, SURVIVAL_WEEKLY_WALMART * squeeze),
             "indian": max(15.0, SURVIVAL_WEEKLY_INDIAN * squeeze)}
 
@@ -101,6 +101,97 @@ def classify(name: str | None, merchant: str | None) -> str:
     if any(p in hay for p in _INDIAN):
         return "indian"
     return "other"
+
+
+def _next_month_first(ms: date) -> date:
+    return (ms.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+def build_directives(*, mode: str, target: float, committed: float,
+                     envelopes: list[dict], rent: dict, subs: dict,
+                     week: dict, no_spend_days: int, ms: date) -> list[dict]:
+    """Ordered, hard-language orders. Severity: stop > slow > act > info."""
+    out: list[dict] = []
+    by_key = {e["key"]: e for e in envelopes}
+    nxt = _next_month_first(ms)
+    nxt_label = f"{calendar.month_abbr[nxt.month]} 1"
+    month_name = calendar.month_name[ms.month]
+    nxt_name = calendar.month_name[nxt.month]
+
+    def add(severity, envelope, order, reason, amount=None):
+        out.append({"severity": severity, "envelope": envelope,
+                    "order": order, "reason": reason, "amount": amount})
+
+    if mode == "DAMAGE_CONTROL":
+        overage = round(committed - target, 2)
+        add("stop", None,
+            f"DAMAGE CONTROL: {month_name} is lost — minimize the overage, protect {nxt_name}.",
+            f"committed spend ${committed:,.0f} is ${overage:,.0f} over the ${target:,.0f} target")
+        add("stop", None, f"Do not prebook anything for {nxt_name}.",
+            f"{nxt_name} is the next winnable month; keep it clean")
+        for key in ("subscriptions", "other"):
+            add("stop", key, f"{ENV_LABEL[key]}: CLOSED until {nxt_label}.",
+                "damage control — every avoidable dollar widens the loss")
+        floor = survival_weekly_groceries(week["weeks_left"], overage)
+        for key in ("walmart", "indian"):
+            add("slow", key,
+                f"Survival groceries only: {ENV_LABEL[key]} ≤ ${floor[key]:.0f}/week.",
+                "eat from the pantry first", floor[key])
+    else:
+        for e in envelopes:
+            if e["state"] == "closed":
+                add("stop", e["key"], f"{ENV_LABEL[e['key']]}: CLOSED until {nxt_label}.",
+                    f"${e['spent']:.2f} spent of ${e['budget']:.0f} — envelope empty")
+            elif e["state"] == "slow":
+                add("slow", e["key"],
+                    f"{ENV_LABEL[e['key']]}: SLOW — max ${e['weekly_allowance']}/week "
+                    f"for the rest of {month_name}.",
+                    f"${e['spent']:.2f} of ${e['budget']:.0f} gone with "
+                    f"{week['days_left']} days left in {month_name}", e["weekly_allowance"])
+
+    sub_budget = ENVELOPES["subscriptions"]
+    if subs["total"] > sub_budget:
+        running = subs["total"]
+        for merchant, monthly in subs["by_merchant"].items():  # largest first
+            add("act", "subscriptions",
+                f"Cancel/downgrade {merchant} (${monthly:.0f}/mo).",
+                f"subscriptions projected ${subs['total']:.0f}/mo vs ${sub_budget:.0f} envelope",
+                monthly)
+            running -= monthly
+            if running <= sub_budget:
+                break
+
+    if rent["status"] == "reserved":
+        add("act", None,
+            f"Rent not posted yet: ${rent['reserve']:,.0f} is reserved, not spendable.",
+            "the reserve is committed on day 1", rent["reserve"])
+    elif rent["posted"] > rent["reserve"]:
+        add("act", None,
+            f"Rent posted ${rent['posted']:,.2f} — ${rent['posted'] - rent['reserve']:,.2f} over reserve.",
+            "overage comes out of the month's headroom; tighten the other envelopes")
+    else:
+        add("info", None,
+            f"Rent posted ${rent['posted']:,.2f}: ${rent['reserve'] - rent['posted']:,.2f} "
+            f"under reserve, banked as buffer.",
+            "buffer is safety margin — never redistributed to envelopes")
+
+    if mode != "DAMAGE_CONTROL":
+        parts = []
+        if by_key["walmart"]["state"] == "open":
+            parts.append(f"Walmart ≤ ${by_key['walmart']['weekly_allowance']} (one trip)")
+        if by_key["indian"]["state"] == "open":
+            parts.append(f"Indian store ≤ ${by_key['indian']['weekly_allowance']}")
+        if parts:
+            add("info", None, f"This week: {', '.join(parts)}.",
+                "weekly allowance = remaining ÷ weeks left — overspend and next week shrinks")
+        if by_key["other"]["state"] == "open":
+            add("info", "other",
+                f"Everything else ≤ ${by_key['other']['weekly_allowance']} this week.",
+                "dining, delivery, rides, one-offs — all of it")
+
+    add("info", None, f"{no_spend_days} no-spend day(s) so far — each is +25 pts.",
+        "no-spend days are the easiest points in the game")
+    return out
 
 
 def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
@@ -178,7 +269,9 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
     # Past/future months anchor the window at month-end (final-day snapshot).
     subs = project_subscriptions(rows, today if in_month else ms.replace(day=dim))
     subs_total = subs["total"]
-    directives: list[dict] = []  # Task 5 replaces this line with build_directives
+    directives = build_directives(mode=mode, target=target, committed=committed,
+                                  envelopes=envelopes, rent=rent, subs=subs,
+                                  week=week, no_spend_days=no_spend_days, ms=ms)
 
     plan = {
         "month": ms.isoformat()[:7], "mode": mode, "target": target,
