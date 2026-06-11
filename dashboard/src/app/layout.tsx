@@ -12,6 +12,7 @@ const NAV: Array<[string, string]> = [
   ["/accounts", "Accounts"],
   ["/transactions", "Transactions"],
   ["/spending", "Spending"],
+  ["/plan", "Plan"],
   ["/net-worth", "Net worth"],
   ["/investments", "Investments"],
   ["/debt", "Debt"],
