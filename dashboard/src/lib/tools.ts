@@ -17,8 +17,11 @@ type RawResult = {
   content?: Array<{ type: string; text?: string }>;
 };
 
-/** FastMCP returns structuredContent for dict results; older paths return text JSON. */
-export function parseToolResult(result: RawResult): unknown {
+/** FastMCP returns structuredContent for dict results; older paths return text JSON.
+ * Accepts unknown because the SDK's callTool return type is a union that
+ * includes a legacy `toolResult` shape. */
+export function parseToolResult(raw: unknown): unknown {
+  const result = raw as RawResult;
   if (result.structuredContent !== undefined) return result.structuredContent;
   const text = result.content?.find((c) => c.type === "text")?.text;
   if (text === undefined) throw new Error("empty tool result");
