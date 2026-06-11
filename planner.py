@@ -71,7 +71,7 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
     target = gamify.MONTHLY_TARGET
     dim = calendar.monthrange(ms.year, ms.month)[1]
     in_month = (today.year, today.month) == (ms.year, ms.month)
-    day = min(today.day, dim) if in_month else dim
+    day = min(today.day, dim) if in_month else dim  # other months: final-day snapshot
     elapsed_share = day / dim
     days_left = dim - day + 1
     weeks_left = max(1, math.ceil(days_left / 7))
@@ -97,6 +97,7 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
             spent[env] += amt
 
     envelopes = []
+    # States are imperatives mirroring directive severities: "slow" = slow down.
     for key, budget in ENVELOPES.items():
         used = round(spent[key], 2)
         remaining = round(budget - used, 2)
@@ -115,7 +116,7 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
             "posted": round(rent_posted, 2) if rent_posted > 0 else None,
             "status": "posted" if rent_posted > 0 else "reserved"}
     week = {"days_left": days_left, "weeks_left": weeks_left}
-    no_spend_days = max(0, day - len(spend_days))
+    no_spend_days = max(0, day - len(spend_days))  # consumed by build_directives (Task 6)
 
     subs_total = 0.0           # Task 4 replaces this line with project_subscriptions
     directives: list[dict] = []  # Task 5 replaces this line with build_directives

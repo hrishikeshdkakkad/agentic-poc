@@ -86,6 +86,7 @@ def test_plan_month_envelope_accounting_and_week_math():
     assert env["indian"]["weekly_allowance"] == 46           # floor(140/3)
     assert env["subscriptions"]["weekly_allowance"] == 43    # floor(130/3)
     assert env["other"]["weekly_allowance"] == 30            # floor(90/3)
+    assert env["walmart"]["state"] == "open"                 # 50 < 230 × 11/30
 
 
 def test_plan_month_rent_posted_under_reserve_is_buffer_not_redistributed():
@@ -117,3 +118,11 @@ def test_weekly_allowance_self_corrects_after_overspend():
     out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
     env = {e["key"]: e for e in out["plan"]["envelopes"]}
     assert env["walmart"]["weekly_allowance"] == 43          # floor(130/3) — shrank from 60
+
+
+def test_last_day_of_month_weekly_allowance_is_full_remaining():
+    out = planner.plan_month(_june_rows(), date(2026, 6, 1), date(2026, 6, 30))
+    p = out["plan"]
+    assert p["week"] == {"days_left": 1, "weeks_left": 1}
+    env = {e["key"]: e for e in p["envelopes"]}
+    assert env["walmart"]["weekly_allowance"] == 180
