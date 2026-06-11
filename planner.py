@@ -22,14 +22,14 @@ ENVELOPES = {"walmart": 230.0, "indian": 180.0, "subscriptions": 150.0,
 # Invariant: RENT_RESERVE + sum(ENVELOPES) == gamify.MONTHLY_TARGET (tested).
 
 _RENT = ("applejack",)  # matches gamify.categorize
-_SUBS = ("claude.ai", "openai", "chatgpt", "vercel", "google one", "google",
+_SUBS = ("claude.ai", "openai", "chatgpt", "vercel", "google one", "google *",
          "apple services", "apple.com/bill", "uber one", "walmart+",
          "wmt plus", "screenstudio", "nvidia", "playstation network")
 _WALMART = ("walmart", "wal-mart")
 _WALMART_NOT = ("amk walmart", "dgtc cafe", "dgtc coffe", "dgtc mm",
                 "eighth pla", "fh cfa", "hq sparky")  # campus cafeteria, not groceries
-_INDIAN = ("namaste", "indiamart", "india mart", "little india", "patel",
-           "india bazaar", "desi")
+_INDIAN = ("namaste", "indiamart", "india mart", "little india", "patel brother",
+           "india bazaar", "desi ")
 
 SUBS_WINDOW_DAYS = 60           # trailing window for the kill-list projection
 SURVIVAL_WEEKLY_WALMART = 50.0  # damage-control grocery floor (default policy)
@@ -40,7 +40,7 @@ ENV_LABEL = {"walmart": "Walmart", "indian": "Indian store",
              "subscriptions": "Subscriptions", "other": "Everything else"}
 
 
-def classify(name, merchant) -> str:
+def classify(name: str | None, merchant: str | None) -> str:
     """Envelope for one transaction: rent|subscriptions|walmart|indian|other.
 
     First match wins. Subscriptions are checked before walmart so

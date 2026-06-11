@@ -56,9 +56,9 @@ First-match-wins over lowercased `"{name} {merchant}"`, evaluated at read time:
 | Order | Envelope | Patterns (initial) | Notes |
 |---|---|---|---|
 | 1 | rent | `applejack` | matches `gamify.categorize` |
-| 2 | subscriptions | `claude.ai`, `openai`, `chatgpt`, `vercel`, `google one`, `google`, `apple services`, `uber one`, `walmart+`, `wmt plus`, `screenstudio`, `nvidia`, `playstation network`, `apple.com/bill` | checked **before** walmart so `Walmart+ Member` lands here |
+| 2 | subscriptions | `claude.ai`, `openai`, `chatgpt`, `vercel`, `google one`, `google *`, `apple services`, `uber one`, `walmart+`, `wmt plus`, `screenstudio`, `nvidia`, `playstation network`, `apple.com/bill` | checked **before** walmart so `Walmart+ Member` lands here |
 | 3 | walmart | `walmart`, `wal-mart` — minus cafeteria exclusions `amk walmart`, `dgtc cafe`, `dgtc coffe`, `dgtc mm`, `eighth pla`, `fh cfa`, `hq sparky` | campus-cafeteria lunches are not groceries → fall through to other |
-| 4 | indian | `namaste`, `indiamart`, `india mart`, `little india`, `patel`, `india bazaar`, `desi` | grocery stores only; restaurants (Kirpa, Paradise Biryani) match nothing → other |
+| 4 | indian | `namaste`, `indiamart`, `india mart`, `little india`, `patel brother`, `india bazaar`, `desi ` | grocery stores only; restaurants (Kirpa, Paradise Biryani) match nothing → other |
 | 5 | other | everything remaining | dining, delivery, Lyft, gas, travel, CVS — an expense is an expense |
 
 Only rows passing `gamify.is_expense()` count (refunds not netted; transfers, card payments,

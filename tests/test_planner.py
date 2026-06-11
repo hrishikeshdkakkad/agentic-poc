@@ -42,3 +42,14 @@ def test_classify_everything_else_is_other():
     assert planner.classify("CHIPOTLE", "Chipotle Mexican Grill") == "other"
     assert planner.classify("ALAMO RENT-A-CAR", "Alamo Rent-a-car") == "other"
     assert planner.classify(None, None) == "other"
+
+
+def test_classify_pattern_false_positive_guards():
+    # surname/brand/prefix traps must NOT be classified by accident
+    assert planner.classify("DESIGUAL STORE", "Desigual") == "other"
+    assert planner.classify("PATEL FAMILY DENTAL", "Patel Family Dental") == "other"
+    assert planner.classify("GOOGLE FIBER", "Google Fiber") == "other"
+    # the real things still match
+    assert planner.classify("GOOGLE *YOUTUBEPREMIUM", "Google") == "subscriptions"
+    assert planner.classify("PATEL BROTHERS", "Patel Brothers") == "indian"
+    assert planner.classify("DESI BAZAAR", "Desi Bazaar") == "indian"
