@@ -290,3 +290,31 @@ def plan_month(rows: list[dict], ms: date, today: date | None = None) -> dict:
         "projected_subs_monthly": subs_total,
     }
     return {"plan": plan, "directives": directives}
+
+
+def load_plan(db_url: str | None = None, today: date | None = None) -> dict:
+    """Pull every transaction and plan the current month (zero Plaid calls).
+
+    Honors the repo's warnings contract: a broken DB becomes a warning entry,
+    never an exception.
+    """
+    today = today or date.today()
+    try:
+        import storage
+        conn = storage.open_readonly(db_url)
+        try:
+            rows = conn.execute(
+                "SELECT date, amount, category_primary, merchant, name FROM transactions"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — one broken store must not break the answer
+        return {"plan": None, "directives": [],
+                "warnings": [f"history DB unreachable: {exc}"], "source": "history_db"}
+    dicts = [
+        {"date": r[0], "amount": r[1], "category_primary": r[2],
+         "merchant": r[3], "name": r[4]}
+        for r in rows
+    ]
+    out = plan_month(dicts, gamify.month_start(today), today)
+    return {**out, "warnings": [], "source": "history_db"}

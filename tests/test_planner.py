@@ -305,3 +305,20 @@ def test_rent_posted_over_reserve_is_flagged():
     out = planner.plan_month(rows, date(2026, 6, 1), date(2026, 6, 11))
     assert any("over reserve" in d["order"] for d in out["directives"]
                if d["order"].startswith("Rent posted"))
+
+
+# ---- load_plan: warnings, not exceptions ----------------------------------------
+
+def test_load_plan_db_down_returns_warning_not_raise(monkeypatch):
+    import storage
+
+    def boom(url=None):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(storage, "open_readonly", boom)
+    out = planner.load_plan()
+    assert out["plan"] is None
+    assert out["directives"] == []
+    assert len(out["warnings"]) == 1
+    assert "connection refused" in out["warnings"][0]
+    assert out["source"] == "history_db"
