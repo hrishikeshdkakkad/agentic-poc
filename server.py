@@ -26,6 +26,7 @@ from plaid_client import (
     ItemHealth,
     all_items,
     build_api,
+    make_handle,
     map_plaid_error,
     shape_account,
     shape_holding,
@@ -43,8 +44,57 @@ def _warning_from_health(h: ItemHealth) -> dict:
     }
 
 
+def _manual_accounts(plaid_keys: set[str], warnings: list[dict]) -> list[dict]:
+    """Accounts that exist only in the local DB (e.g. an Apple Card CSV import).
+
+    Manually-imported sources have no Plaid Item, so the live accounts_get
+    loop can never see them; surface them from the accounts table instead,
+    mirroring the dashboard's institutions list. CSVs carry no balance, so
+    the balance fields are null. A DB failure degrades to a warning rather
+    than silently omitting these accounts.
+    """
+    try:
+        conn = storage.open_readonly()
+        try:
+            rows = conn.execute(
+                "SELECT account_id, item_key, institution, name, official_name,"
+                " mask, type, subtype, currency FROM accounts"
+                " ORDER BY institution, name"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        warnings.append({
+            "institution": "manual imports",
+            "status": "db_unavailable",
+            "reason": f"manually-imported accounts omitted: {e}",
+        })
+        return []
+    return [
+        {
+            "handle": make_handle(institution or item_key, subtype or type_ or "", mask),
+            "account_id": account_id,
+            "institution": institution,
+            "name": name,
+            "official_name": official_name,
+            "mask": mask,
+            "type": type_,
+            "subtype": subtype,
+            "balance": {"current": None, "available": None, "limit": None,
+                        "currency": currency},
+            "source": "csv_import",
+        }
+        for account_id, item_key, institution, name, official_name,
+            mask, type_, subtype, currency in rows
+        if item_key not in plaid_keys
+    ]
+
+
 def _list_accounts_impl() -> dict:
     """List every account across all linked Items, with balances.
+
+    Includes manually-imported accounts (e.g. Apple Card CSV) from the local
+    DB, marked source="csv_import" with null balances.
 
     Returns:
         {"accounts": [...], "warnings": [...]}. Warnings describe Items that
@@ -53,7 +103,9 @@ def _list_accounts_impl() -> dict:
     api = build_api()
     accounts: list[dict] = []
     warnings: list[dict] = []
+    plaid_keys: set[str] = set()
     for env_key, token, health in all_items(api):
+        plaid_keys.add(env_key)
         if health.status != "healthy":
             warnings.append(_warning_from_health(health))
             continue
@@ -66,6 +118,7 @@ def _list_accounts_impl() -> dict:
         except ApiException as e:
             mapped = map_plaid_error(e, health.institution_name)["error"]
             warnings.append({"institution": health.institution_name, **mapped})
+    accounts.extend(_manual_accounts(plaid_keys, warnings))
     return {"accounts": accounts, "warnings": warnings}
 
 
