@@ -210,3 +210,17 @@ def test_plan_month_carries_projected_subs():
     # _subs_rows alone projects 180; the Jun-7 OpenAI charge in _june_rows
     # lifts OpenAI from 20/2=10 to 40/2=20, so the total becomes 190.
     assert out["plan"]["projected_subs_monthly"] == 190.0
+
+
+# ---- survival policy (user-authored) -------------------------------------------
+
+def test_survival_policy_contract():
+    """Whatever policy the user writes must honor this contract."""
+    for weeks_left in (1, 2, 3, 4, 5):
+        for overage in (0.0, 50.0, 1836.20, 5000.45):
+            floor = planner.survival_weekly_groceries(weeks_left, overage)
+            assert set(floor) == {"walmart", "indian"}
+            assert all(isinstance(v, float) and v >= 0.0 for v in floor.values())
+            # survival ≠ normal life: combined floor stays under the normal weekly pace
+            assert floor["walmart"] + floor["indian"] <= (
+                planner.ENVELOPES["walmart"] + planner.ENVELOPES["indian"]) / 4 * 1.5

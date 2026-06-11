@@ -40,6 +40,19 @@ ENV_LABEL = {"walmart": "Walmart", "indian": "Indian store",
              "subscriptions": "Subscriptions", "other": "Everything else"}
 
 
+def survival_weekly_groceries(weeks_left: int, overage: float) -> dict[str, float]:
+    """USER POLICY — the weekly grocery floor during DAMAGE_CONTROL.
+
+    The month is already lost; every grocery dollar widens the loss, but you
+    still have to eat. Decide how: flat floor? taper as overage grows?
+    Walmart-only past some overage? Inputs: weeks_left in the month, overage
+    in dollars (committed − target, > 0). Returns weekly caps:
+    {"walmart": float, "indian": float}. Contract in
+    tests/test_planner.py::test_survival_policy_contract.
+    """
+    return {"walmart": SURVIVAL_WEEKLY_WALMART, "indian": SURVIVAL_WEEKLY_INDIAN}
+
+
 def project_subscriptions(rows: list[dict], today: date) -> dict:
     """Per-merchant monthly subscription estimate from the trailing window.
 
