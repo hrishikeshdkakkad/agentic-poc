@@ -166,6 +166,9 @@ def build_directives(*, mode: str, target: float, committed: float,
             running -= monthly
             if running <= sub_budget:
                 break
+        # Unreachable while every projected merchant is cuttable (running always
+        # reaches 0); guards a future where some subs are filtered/whitelisted
+        # between projection and kill-list.
         if running > sub_budget:
             add("act", "subscriptions",
                 f"Audit subscriptions — projected ${subs['total']:.0f}/mo vs ${sub_budget:.0f} envelope.",
