@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useTool } from "@/lib/hooks";
+import { linkFetch } from "@/lib/api";
 import { fmtDate, pct, usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading, Stat, WarningsBanner, Warning } from "@/components/ui";
+import { Card, ErrorBanner, Loading, Stat } from "@/components/ui";
 import { AllocationDonut } from "@/components/charts";
 
 type Portfolio = {
@@ -23,28 +24,42 @@ type Portfolio = {
   basis_coverage_pct: number | null;
   total_unrealized_gain: number | null;
 };
+type InvTx = {
+  date?: string; name?: string; symbol?: string | null; security_name?: string | null;
+  type?: string; subtype?: string; amount?: number;
+};
 type InvTxs = {
-  investment_transactions: Array<{
-    date?: string; name?: string; type?: string; subtype?: string;
-    amount?: number; quantity?: number; price?: number; symbol?: string | null;
-    institution?: string;
-  }>;
-  warnings?: Warning[];
+  investment_transactions: InvTx[];
+  total_matching?: number;
 };
 
-function daysAgoIso(days: number): string {
-  return new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
-}
+const ACTIVITY_LIMIT = 100;
 
 export default function InvestmentsPage() {
   const portfolio = useTool<Portfolio>("get_portfolio_analysis");
-  const [showActivity, setShowActivity] = useState(false);
-  // Live Plaid call — only fire after the user asks for it.
-  const activity = useTool<InvTxs>(showActivity ? "get_investment_transactions" : "",
-    showActivity ? { start_date: daysAgoIso(90), end_date: daysAgoIso(0) } : {});
+  // Persisted, zero-Plaid read from the local history store — instant, full history.
+  const activity = useTool<InvTxs>("list_investment_transactions", { limit: ACTIVITY_LIMIT });
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState("");
+
+  async function refreshFromPlaid() {
+    setRefreshing(true);
+    setRefreshMsg("Pulling latest from Plaid…");
+    try {
+      await linkFetch("sync", { method: "POST" });
+      setRefreshMsg("");
+      await activity.mutate();
+    } catch (e) {
+      setRefreshMsg(e instanceof Error ? e.message : "sync failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const p = portfolio.data;
   const gain = p?.total_unrealized_gain;
+  const txs = activity.data?.investment_transactions ?? [];
+  const total = activity.data?.total_matching ?? 0;
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -130,39 +145,47 @@ export default function InvestmentsPage() {
         ) : portfolio.error ? null : <Loading />}
       </Card>
 
-      <Card className="mt-4" title="Recent investment activity"
+      <Card className="mt-4" title="Investment activity"
         right={
-          <button onClick={() => setShowActivity(!showActivity)}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm font-semibold">
-            {showActivity ? "Hide" : "Load (live Plaid, ~30s)"}
+          <button onClick={refreshFromPlaid} disabled={refreshing}
+            className="rounded-lg border border-line px-3 py-1.5 text-sm font-semibold disabled:opacity-50">
+            {refreshing ? "Refreshing…" : "Refresh from Plaid"}
           </button>
         }>
-        {!showActivity ? (
-          <div className="text-sm text-mut">Trades, dividends, and fees from the last 90 days — fetched live on demand.</div>
-        ) : activity.data ? (
-          <>
-            <WarningsBanner warnings={activity.data.warnings} />
-            {activity.data.investment_transactions.length ? (
+        {activity.data ? (
+          txs.length ? (
+            <>
+              <div className="mb-2 text-xs text-mut">
+                Showing {txs.length}{total > txs.length ? ` of ${total.toLocaleString()}` : ""} stored
+                {" "}— trades, dividends &amp; fees from your synced history (instant, no Plaid call).
+              </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                    <th className="py-2">Date</th><th>Description</th><th>Type</th><th className="text-right">Amount</th>
+                    <th className="py-2">Date</th><th>Symbol</th><th>Description</th>
+                    <th>Type</th><th className="text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {activity.data.investment_transactions.map((t, i) => (
+                  {txs.map((t, i) => (
                     <tr key={i} className="border-t border-line">
                       <td className="py-2 text-mut">{fmtDate(t.date)}</td>
-                      <td className="py-2">{t.name ?? t.symbol ?? "—"}</td>
+                      <td className="py-2 font-medium">{t.symbol ?? "—"}</td>
+                      <td className="max-w-56 truncate py-2">{t.name ?? t.security_name ?? "—"}</td>
                       <td className="py-2 text-mut">{t.subtype ?? t.type ?? "—"}</td>
                       <td className="py-2 text-right">{usd(t.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            ) : <div className="text-mut">No activity in the last 90 days.</div>}
-          </>
+            </>
+          ) : (
+            <div className="text-sm text-mut">
+              No investment transactions stored yet. Click &ldquo;Refresh from Plaid&rdquo; to pull them in.
+            </div>
+          )
         ) : activity.error ? <ErrorBanner error={activity.error} /> : <Loading />}
+        {refreshMsg && <div className="mt-2 text-xs text-mut">{refreshMsg}</div>}
       </Card>
     </div>
   );
