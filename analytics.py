@@ -246,7 +246,10 @@ _TABLE_DOCS: dict[str, dict] = {
             "investment_transaction_id": "Primary key; upserts keep re-pulls duplicate-free",
             "type": "buy | sell | cash | fee | transfer (Plaid investment-transaction type)",
             "subtype": "Finer detail, e.g. dividend, interest, withdrawal, margin expense",
-            "amount": "Total value of the transaction (Plaid sign convention)",
+            "amount": "Cash-flow value: POSITIVE = cash out (buys, fees, withdrawals), "
+                      "NEGATIVE = cash in (sells, dividends, interest received). A dividend "
+                      "received is therefore negative -- same direction as transactions, where "
+                      "income is also negative.",
             "symbol": "Security ticker (NULL for pure cash/fee rows)",
         },
     },
