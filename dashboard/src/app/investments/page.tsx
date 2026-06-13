@@ -5,7 +5,7 @@ import { useSWRConfig } from "swr";
 import { useTool } from "@/lib/hooks";
 import { linkFetch } from "@/lib/api";
 import { fmtDate, pct, usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading, Stat } from "@/components/ui";
+import { Card, ErrorBanner, Loading, Money, Stat } from "@/components/ui";
 import { AllocationDonut } from "@/components/charts";
 
 type Portfolio = {
@@ -177,7 +177,7 @@ export default function InvestmentsPage() {
                       <td className="py-2 font-medium">{t.symbol ?? "—"}</td>
                       <td className="max-w-56 truncate py-2">{t.name ?? t.security_name ?? "—"}</td>
                       <td className="py-2 text-mut">{t.subtype ?? t.type ?? "—"}</td>
-                      <td className="py-2 text-right">{usd(t.amount)}</td>
+                      <td className="py-2 text-right"><Money amount={t.amount} /></td>
                     </tr>
                   ))}
                 </tbody>
