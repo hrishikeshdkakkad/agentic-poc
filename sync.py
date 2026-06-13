@@ -22,6 +22,7 @@ from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetR
 from plaid.model.liabilities_get_request import LiabilitiesGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
+import config_secrets
 import storage
 from plaid_client import ItemHealth, SecretStr, all_items, build_api, map_plaid_error
 
@@ -174,6 +175,33 @@ def run_sync(api=None, db_url: str | None = None) -> dict:
             "tags": tags, "warnings": warnings}
 
 
+def lambda_handler(event=None, context=None) -> dict:
+    """EventBridge Scheduler entrypoint: run one sync pass.
+
+    Secrets are loaded from SSM (see config_secrets) before Plaid or the
+    database is touched. A total failure (e.g. database unreachable) propagates
+    so the schedule's retry kicks in; per-Item issues are captured as warnings
+    by run_sync, not raised -- sync is idempotent, so the next scheduled run
+    heals them. Token material is never logged or returned (warnings carry
+    institution + Plaid error code/category only).
+    """
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+    config_secrets.load_into_env()
+    result = run_sync()
+    items = result.get("items") or []
+    warnings = result.get("warnings") or []
+    _log.info(
+        "sync complete: items=%d warnings=%d total_transactions=%s",
+        len(items), len(warnings), result.get("total_transactions_stored"),
+    )
+    return {
+        "ok": True,
+        "items_synced": len(items),
+        "warnings": warnings,
+        "total_transactions_stored": result.get("total_transactions_stored"),
+    }
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
     try:
@@ -181,6 +209,7 @@ def main() -> int:
         load_dotenv()
     except ImportError:
         pass
+    config_secrets.load_into_env()
     result = run_sync()
     print(json.dumps(result, indent=2, default=str))
     return 0

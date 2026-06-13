@@ -78,6 +78,13 @@ jobs:
           --function-name personal-finance-mcp
           --zip-file fileb://lambda.zip
       - run: aws lambda wait function-updated --function-name personal-finance-mcp
+      # Same artifact also backs the scheduled sync function (handler differs,
+      # set in its function config). Keep both functions on the same code.
+      - run: >
+          aws lambda update-function-code
+          --function-name personal-finance-mcp-sync
+          --zip-file fileb://lambda.zip
+      - run: aws lambda wait function-updated --function-name personal-finance-mcp-sync
 
   smoke:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

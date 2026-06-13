@@ -27,55 +27,35 @@ PY=.venv/bin/python
 
 [ -f "$ZIP" ] || { echo "run deploy/build_lambda.sh first" >&2; exit 1; }
 
-ENV_JSON=$(mktemp -t pfm-lambda-env)
-chmod 600 "$ENV_JSON"
-trap 'rm -f "$ENV_JSON"' EXIT
-
-"$PY" - "$ENV_JSON" <<'PYEOF'
-import json, os, secrets, sys
+# Secrets are NOT set as plaintext function env vars (a shared-account admin
+# could otherwise read them via GetFunctionConfiguration). Generate the MCP
+# bearer token once into .env, then setup_security.sh pushes ALL secrets into
+# the KMS-encrypted SSM parameter (alias/personal-finance-mcp, which denies the
+# other admins) and provisions the least-privilege roles. The function only
+# ever receives non-secret pointers. PFM_TOKENS_DATABASE_URL stays unset: token
+# ciphertext is read from plaid_tokens inside DATABASE_URL; HORIZON=1 guards
+# link_helper from ever running in a deployment.
+"$PY" - <<'PYEOF'
+import secrets
 from dotenv import dotenv_values
-
 env_path = ".env"
 values = dotenv_values(env_path)
-
-token = (values.get("MCP_AUTH_TOKEN") or "").strip()
-if not token:
-    token = secrets.token_urlsafe(32)
+if not (values.get("MCP_AUTH_TOKEN") or "").strip():
     with open(env_path, "a") as f:
         f.write(
             "\n# Bearer token required by the remote (AWS Lambda) MCP endpoint.\n"
-            f"MCP_AUTH_TOKEN={token}\n"
+            f"MCP_AUTH_TOKEN={secrets.token_urlsafe(32)}\n"
         )
-
-key_path = os.path.expanduser("~/.config/personal-finance-mcp/fernet.key")
-fernet_key = (values.get("FERNET_KEY") or "").strip()
-if not fernet_key:
-    with open(key_path) as f:
-        fernet_key = f.read().strip()
-
-required = {
-    "PLAID_CLIENT_ID": values.get("PLAID_CLIENT_ID"),
-    "PLAID_SECRET": values.get("PLAID_SECRET"),
-    "PLAID_ENV": values.get("PLAID_ENV") or "production",
-    "DATABASE_URL": values.get("DATABASE_URL"),
-}
-missing = [k for k, v in required.items() if not v]
-if missing:
-    sys.exit(f"missing in .env: {', '.join(missing)}")
-
-# PFM_TOKENS_DATABASE_URL is deliberately NOT forwarded: on Lambda the token
-# ciphertext is read from plaid_tokens inside DATABASE_URL (Neon). HORIZON=1
-# is the repo's guard that link_helper can never run in a deployment.
-lambda_env = {
-    **required,
-    "FERNET_KEY": fernet_key,
-    "MCP_AUTH_TOKEN": token,
-    "HORIZON": "1",
-    "PFM_SECRETS_DIR": "/tmp/pfm-secrets",
-}
-with open(sys.argv[1], "w") as f:
-    json.dump({"Variables": lambda_env}, f)
 PYEOF
+
+REGION="$REGION" PY="$PY" bash deploy/setup_security.sh
+
+ENV_JSON=$(mktemp -t pfm-lambda-env)
+chmod 600 "$ENV_JSON"
+trap 'rm -f "$ENV_JSON"' EXIT
+printf '%s' \
+  '{"Variables":{"PFM_CONFIG_PARAM":"/personal-finance-mcp/config","HORIZON":"1","PFM_SECRETS_DIR":"/tmp/pfm-secrets"}}' \
+  > "$ENV_JSON"
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"

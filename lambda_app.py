@@ -29,6 +29,13 @@ import secrets
 
 from mangum import Mangum
 
+# Populate os.environ from the SSM SecureString (see config_secrets) BEFORE
+# importing the app or reading MCP_AUTH_TOKEN below. No-op when PFM_CONFIG_PARAM
+# is unset, so local runs are unchanged.
+import config_secrets
+
+config_secrets.load_into_env()
+
 from server import mcp
 
 _AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "").strip()
