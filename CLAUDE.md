@@ -43,6 +43,10 @@ through the .venv symlink under ~/Documents).
 
 Push to `main` → GitHub Actions runs test → build → deploy (Lambda code via OIDC) → smoke. **Code deploys go through CI; env/config changes (env vars, secrets) deploy locally only** via `./deploy/build_lambda.sh && ./deploy/deploy.sh`, because `.env` and the Fernet key never reach GitHub. Lambda build quirks (psycopg version pin, plaid-python sdist handling) live in `deploy/build_lambda.sh` — don't "fix" them without reading the comments there.
 
+**Two Lambdas, one artifact.** `personal-finance-mcp` (MCP server, public Function URL, bearer-gated) and `personal-finance-mcp-sync` (scheduled Plaid sync, handler `sync.lambda_handler`, no URL) ship from the same `deploy/lambda.zip`. The sync runs ~6×/day via an EventBridge Scheduler schedule (`rate(4 hours)`, 2 retries); CI updates both functions' code.
+
+**Secrets are not plaintext env vars** (this is a shared AWS account with other admins). Both functions read config from an SSM SecureString (`/personal-finance-mcp/config`) encrypted by a customer-managed KMS key (`alias/personal-finance-mcp`) whose policy DENIES every principal except root and the two function roles — so the other account admins cannot decrypt the Plaid secret / Fernet key / DB URL (verified: a `kms:*` principal gets AccessDenied). `config_secrets.load_into_env()` fetches it at cold start; it is a no-op without `PFM_CONFIG_PARAM`, so `.env`/tests/local runs are unchanged. Local provisioning (run as the account owner): `deploy/setup_security.sh` (CMK + SSM + least-priv roles), `deploy/deploy_sync.sh` (sync fn + schedule), `deploy/migrate_server_secrets.sh` (strip the server's plaintext env after the SSM path is proven), `deploy/verify_security.sh` (assert the whole posture). `deploy/deploy.sh` now pushes secrets to SSM and sets only pointer env on the function.
+
 ## Architecture
 
 Three data planes feed the MCP tools, and knowing which plane a tool reads from explains most behavior:

@@ -4,7 +4,7 @@ Drives the REMOTE server through a real MCP client (fastmcp Client over
 streamable HTTP), exactly the way a Claude agent will:
 
   1. auth gate: /health open; no token and wrong token both rejected
-  2. protocol: initialize, tools/list (expects all 29 tools)
+  2. protocol: initialize, tools/list (expects all 30 tools)
   3. every history/insight tool (answers from Postgres, zero Plaid calls)
   4. every live Plaid tool (proves Plaid creds + decrypted tokens work
      from the deployment)
@@ -163,7 +163,7 @@ async def main() -> None:
     # -- protocol + every tool, one client session ---------------------------
     async with Client(transport) as client:
         tools = await client.list_tools()
-        check("protocol: tools/list returns all 29 tools", len(tools) == 29,
+        check("protocol: tools/list returns all 30 tools", len(tools) == 30,
               f"({len(tools)} tools)")
 
         for name, args, assertion, proves in TOOL_CHECKS:
