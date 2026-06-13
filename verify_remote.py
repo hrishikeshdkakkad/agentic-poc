@@ -4,7 +4,7 @@ Drives the REMOTE server through a real MCP client (fastmcp Client over
 streamable HTTP), exactly the way a Claude agent will:
 
   1. auth gate: /health open; no token and wrong token both rejected
-  2. protocol: initialize, tools/list (expects all 30 tools)
+  2. protocol: initialize, tools/list (expects all 31 tools)
   3. every history/insight tool (answers from Postgres, zero Plaid calls)
   4. every live Plaid tool (proves Plaid creds + decrypted tokens work
      from the deployment)
@@ -58,6 +58,9 @@ TOOL_CHECKS: list[tuple[str, dict, object, str]] = [
      lambda p: "tables" in p or "transactions" in json.dumps(p), "schema docs"),
     ("list_transactions", {"limit": 5},
      lambda p: len(p["transactions"]) > 0 and p["total_matching"] > 0, "stored rows"),
+    ("list_investment_transactions", {"limit": 5},
+     lambda p: "investment_transactions" in p and "total_matching" in p,
+     "stored investment rows"),
     ("aggregate_spending", {"start_date": "2026-01-01", "end_date": NOW},
      lambda p: "groups" in p or "total" in json.dumps(p), "spend aggregation"),
     ("query_finances", {"sql": "SELECT count(*) AS n FROM transactions"},
@@ -163,7 +166,7 @@ async def main() -> None:
     # -- protocol + every tool, one client session ---------------------------
     async with Client(transport) as client:
         tools = await client.list_tools()
-        check("protocol: tools/list returns all 30 tools", len(tools) == 30,
+        check("protocol: tools/list returns all 31 tools", len(tools) == 31,
               f"({len(tools)} tools)")
 
         for name, args, assertion, proves in TOOL_CHECKS:

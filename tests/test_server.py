@@ -435,6 +435,40 @@ def test_get_investment_transactions_paginates_and_shapes(fake_env_tokens):
     assert fake_api.investments_transactions_get.call_count == 2
 
 
+def test_get_investment_transactions_enriches_with_security_and_institution(fake_env_tokens):
+    fake_api = MagicMock()
+    fake_api.investments_transactions_get.return_value = MagicMock(to_dict=MagicMock(return_value={
+        "investment_transactions": [
+            {"investment_transaction_id": "it1", "account_id": "inv1", "date": "2026-04-01",
+             "name": "BUY AAPL", "type": "buy", "subtype": "buy", "amount": 1500,
+             "iso_currency_code": "USD", "security_id": "sec_a"}],
+        "securities": [{"security_id": "sec_a", "ticker_symbol": "AAPL",
+                        "name": "Apple Inc.", "type": "equity"}],
+        "total_investment_transactions": 1,
+    }))
+    items = [("ROBINHOOD", SecretStr("t"), ItemHealth("ROBINHOOD", "healthy", "ins_r", "Robinhood"))]
+    with patch.object(srv, "build_api", return_value=fake_api), \
+         patch.object(srv, "all_items", return_value=items):
+        out = srv._get_investment_transactions_impl("2026-04-01", "2026-04-30")
+    t = out["investment_transactions"][0]
+    assert t["symbol"] == "AAPL"
+    assert t["security_name"] == "Apple Inc."
+    assert t["security_type"] == "equity"
+    assert t["name"] == "BUY AAPL"  # transaction name, distinct from the security name
+    assert t["institution"] == "Robinhood"
+
+
+def test_list_investment_transactions_reads_local_store(db):
+    db.execute(
+        "INSERT INTO investment_transactions VALUES "
+        "('iv1','acc_b','ROBINHOOD','2026-05-01','BUY NVDA','buy','buy',50.0,0.1,500.0,0.0,"
+        "'sec_a','NVDA','NVIDIA','equity','USD',now())")
+    out = srv._list_investment_transactions_impl()
+    assert out["source"] == "history_db"
+    assert out["total_matching"] == 1
+    assert out["investment_transactions"][0]["symbol"] == "NVDA"
+
+
 # ---------------------------------------------------------------------------
 # Task 13: get_institutions_status
 # ---------------------------------------------------------------------------

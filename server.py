@@ -15,8 +15,6 @@ from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.accounts_balance_get_request_options import AccountsBalanceGetRequestOptions
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
-from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
-from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
 from plaid.model.liabilities_get_request import LiabilitiesGetRequest
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
@@ -26,6 +24,7 @@ from plaid_client import (
     ItemHealth,
     all_items,
     build_api,
+    fetch_investment_transactions,
     make_handle,
     map_plaid_error,
     shape_account,
@@ -466,45 +465,9 @@ def _get_investment_transactions_impl(
         if health.status != "healthy":
             warnings.append(_warning_from_health(health))
             continue
-        offset = 0
         try:
-            while True:
-                resp = api.investments_transactions_get(
-                    InvestmentsTransactionsGetRequest(
-                        access_token=token.reveal(),
-                        start_date=date.fromisoformat(clipped_start),
-                        end_date=date.fromisoformat(clipped_end),
-                        options=InvestmentsTransactionsGetRequestOptions(
-                            count=500,
-                            offset=offset,
-                        ),
-                    )
-                ).to_dict()
-                secs_by_id = {
-                    s["security_id"]: s
-                    for s in resp.get("securities", []) or []
-                }
-                batch = resp.get("investment_transactions", []) or []
-                for t in batch:
-                    investment_transactions.append({
-                        "investment_transaction_id": t.get("investment_transaction_id"),
-                        "account_id": t.get("account_id"),
-                        "date": str(t.get("date")) if t.get("date") else None,
-                        "type": t.get("type"),
-                        "subtype": t.get("subtype"),
-                        "amount": t.get("amount"),
-                        "quantity": t.get("quantity"),
-                        "price": t.get("price"),
-                        "fees": t.get("fees"),
-                        "currency": t.get("iso_currency_code"),
-                        "symbol": secs_by_id.get(t.get("security_id"), {}).get("ticker_symbol"),
-                        "name": secs_by_id.get(t.get("security_id"), {}).get("name"),
-                        "institution": health.institution_name,
-                    })
-                total = resp.get("total_investment_transactions") or 0
-                offset += len(batch)
-                if offset >= total or not batch:
-                    break
+            for row in fetch_investment_transactions(api, token, clipped_start, clipped_end):
+                investment_transactions.append({**row, "institution": health.institution_name})
         except ApiException as e:
             mapped = map_plaid_error(e, health.institution_name)["error"]
             warnings.append({"institution": health.institution_name, **mapped})
@@ -805,6 +768,37 @@ list_transactions = mcp.tool(
 )(_list_transactions_impl)
 
 
+def _list_investment_transactions_impl(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    account_id: str | None = None,
+    type: str | None = None,
+    symbol: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """List stored investment transactions — brokerage trades, dividends, interest,
+    fees, transfers — from local history. Zero Plaid calls.
+
+    Reads the investment_transactions table that sync populates from
+    /investments/transactions/get. Filters combine with AND: ISO date range,
+    account_id, type (buy/sell/cash/fee/transfer), symbol (ticker). Newest first,
+    paged via limit (max 500)/offset. Unlike get_investment_transactions, there is
+    no 2-year lookback cap and no Plaid traffic. This is a SEPARATE stream from
+    list_transactions (cash-flow); investment activity has no merchant/category.
+    """
+    return analytics.list_investment_transactions(
+        start_date=start_date, end_date=end_date, account_id=account_id,
+        type=type, symbol=symbol, limit=limit, offset=offset,
+    )
+
+
+list_investment_transactions = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "List Investment Transactions (local)"},
+    name="list_investment_transactions",
+)(_list_investment_transactions_impl)
+
+
 def _get_sync_status_impl() -> dict:
     """Report local-store freshness and the Plaid API call counter.
 
@@ -828,7 +822,8 @@ def _get_sync_status_impl() -> dict:
         counts = {
             t: conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
             for t in ("accounts", "transactions", "balance_snapshots",
-                      "holdings_snapshots", "liabilities_snapshots")
+                      "holdings_snapshots", "investment_transactions",
+                      "liabilities_snapshots")
         }
     finally:
         conn.close()

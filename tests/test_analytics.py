@@ -162,7 +162,8 @@ def test_new_tools_registered():
     names = {t.name for t in tools}
     assert {"sync_now", "get_net_worth", "get_net_worth_history",
             "aggregate_spending", "query_finances", "get_sync_status",
-            "describe_tables", "list_transactions"} <= names
+            "describe_tables", "list_transactions",
+            "list_investment_transactions"} <= names
     # original 9 still present
     assert {"list_accounts", "get_balances", "get_transactions",
             "get_recurring_transactions", "get_liabilities",
@@ -174,9 +175,12 @@ def test_describe_tables_reports_schema_and_notes(seeded_db):
     out = analytics.describe_tables()
     assert set(out["tables"]) == {
         "accounts", "transactions", "balance_snapshots",
-        "holdings_snapshots", "liabilities_snapshots", "sync_state",
-        "transaction_tags", "category_overrides",
+        "holdings_snapshots", "investment_transactions", "liabilities_snapshots",
+        "sync_state", "transaction_tags", "category_overrides",
     }
+    inv = out["tables"]["investment_transactions"]
+    assert inv["description"] and "investment" in inv["description"].lower()
+    assert "investment_transaction_id" in {c["name"] for c in inv["columns"]}
     tx = out["tables"]["transactions"]
     assert "outflow" in tx["description"]
     cols = {c["name"]: c for c in tx["columns"]}
@@ -229,6 +233,7 @@ def test_get_sync_status_reports_counts_and_counter(seeded_db):
     out = srv._get_sync_status_impl()
     assert out["table_counts"]["transactions"] == 8
     assert out["table_counts"]["balance_snapshots"] == 6
+    assert "investment_transactions" in out["table_counts"]
     assert isinstance(out["plaid_calls_this_session"], int)
 
 
@@ -240,6 +245,52 @@ def test_list_transactions_includes_tags(seeded_db):
     by_id = {t["transaction_id"]: t for t in out["transactions"]}
     assert by_id["t1"]["tags"] == ["delivery"]
     assert by_id["t4"]["tags"] == []
+
+
+def _seed_inv_txns(conn):
+    rows = [
+        ("iv1", "acc_b", "ROBINHOOD", "2026-01-05", "BUY AAPL", "buy", "buy",
+         100.0, 0.5, 200.0, 0.0, "sec_a", "AAPL", "Apple Inc.", "equity", "USD"),
+        ("iv2", "acc_b", "ROBINHOOD", "2026-02-10", "DIVIDEND", "cash", "dividend",
+         -3.0, 0.0, 0.0, 0.0, "sec_a", "AAPL", "Apple Inc.", "equity", "USD"),
+        ("iv3", "acc_c", "SOFI", "2026-03-01", "SELL VTI", "sell", "sell",
+         -50.0, 0.2, 250.0, 0.1, "sec_b", "VTI", "Vanguard", "etf", "USD"),
+    ]
+    for r in rows:
+        conn.execute(
+            "INSERT INTO investment_transactions VALUES "
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", r)
+
+
+def test_list_investment_transactions_filters_and_paging(db):
+    _seed_inv_txns(db)
+    out = analytics.list_investment_transactions()
+    assert out["total_matching"] == 3
+    assert out["source"] == "history_db"
+    # newest first
+    assert out["investment_transactions"][0]["date"] >= out["investment_transactions"][1]["date"]
+
+    assert {t["investment_transaction_id"]
+            for t in analytics.list_investment_transactions(type="buy")["investment_transactions"]} == {"iv1"}
+    assert {t["investment_transaction_id"]
+            for t in analytics.list_investment_transactions(account_id="acc_c")["investment_transactions"]} == {"iv3"}
+    assert {t["investment_transaction_id"]
+            for t in analytics.list_investment_transactions(symbol="aapl")["investment_transactions"]} == {"iv1", "iv2"}
+    assert {t["investment_transaction_id"] for t in analytics.list_investment_transactions(
+        start_date="2026-02-01", end_date="2026-02-28")["investment_transactions"]} == {"iv2"}
+
+
+def test_list_investment_transactions_validates_dates_and_caps_limit(db):
+    with pytest.raises(ValueError):
+        analytics.list_investment_transactions(start_date="not-a-date")
+    assert analytics.list_investment_transactions(limit=99999)["limit"] == 500
+
+
+def test_list_investment_transactions_zero_plaid_calls(db):
+    _seed_inv_txns(db)
+    before = plaid_call_count()
+    analytics.list_investment_transactions(symbol="AAPL")
+    assert plaid_call_count() == before
 
 
 def test_new_insight_and_override_tools_registered():

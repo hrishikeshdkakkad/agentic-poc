@@ -223,12 +223,16 @@ def do_sync() -> dict:
 
 class CreateReq(BaseModel):
     update_access_token: str | None = None
+    # Update mode only: add the investments product to an already-linked Item
+    # (e.g. an investment item linked before investments-transactions consent was
+    # captured -- the Fidelity/Schwab case). Plaid grants it via re-consent.
+    add_investments: bool = False
 
 
 @app.post("/create-link-token")
 def create_link_token(req: CreateReq) -> dict:
     if req.update_access_token:
-        body = LinkTokenCreateRequest(
+        update_kwargs = dict(
             user=LinkTokenCreateRequestUser(client_user_id="personal-user"),
             client_name="Personal Finance MCP",
             country_codes=[CountryCode("US")],
@@ -236,15 +240,20 @@ def create_link_token(req: CreateReq) -> dict:
             access_token=req.update_access_token,
             update=LinkTokenCreateRequestUpdate(account_selection_enabled=False),
         )
+        if req.add_investments:
+            # Adds the investments product to the existing Item via consent.
+            update_kwargs["additional_consented_products"] = [Products("investments")]
+        body = LinkTokenCreateRequest(**update_kwargs)
     else:
+        # required_if_supported: brokerages capture the investments consent at link
+        # time (so investments-transactions never needs a later re-link), while
+        # banks that don't support it still link cleanly.
         body = LinkTokenCreateRequest(
             user=LinkTokenCreateRequestUser(client_user_id="personal-user"),
             client_name="Personal Finance MCP",
             products=[Products("transactions")],
-            optional_products=[
-                Products("liabilities"),
-                Products("investments"),
-            ],
+            required_if_supported_products=[Products("investments")],
+            optional_products=[Products("liabilities")],
             country_codes=[CountryCode("US")],
             language="en",
         )
