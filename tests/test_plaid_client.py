@@ -311,3 +311,78 @@ def test_shape_holding_missing_security():
     out = shape_holding(holding, securities={})
     assert out["symbol"] is None
     assert out["name"] is None
+
+
+# ============================================================================
+# Investment transactions: shaping + paginated fetch
+# ============================================================================
+
+from plaid_client import shape_investment_transaction, fetch_investment_transactions
+
+
+class _FakeResp:
+    def __init__(self, d):
+        self._d = d
+
+    def to_dict(self):
+        return self._d
+
+
+def test_shape_investment_transaction_joins_security_and_keeps_txn_name():
+    raw = {
+        "investment_transaction_id": "it1", "account_id": "acc_inv",
+        "security_id": "sec_a", "date": "2026-04-15", "name": "BUY AAPL",
+        "type": "buy", "subtype": "buy", "amount": 100.0, "quantity": 0.5,
+        "price": 200.0, "fees": 0.0, "iso_currency_code": "USD",
+    }
+    securities = {"sec_a": {"security_id": "sec_a", "ticker_symbol": "AAPL",
+                            "name": "Apple Inc.", "type": "equity"}}
+    out = shape_investment_transaction(raw, securities)
+    assert out["investment_transaction_id"] == "it1"
+    assert out["symbol"] == "AAPL"
+    assert out["security_name"] == "Apple Inc."
+    assert out["security_type"] == "equity"
+    assert out["name"] == "BUY AAPL"  # transaction name, NOT security name
+    assert out["security_id"] == "sec_a"
+    assert (out["type"], out["subtype"]) == ("buy", "buy")
+    assert (out["amount"], out["quantity"], out["price"], out["fees"]) == (100.0, 0.5, 200.0, 0.0)
+    assert out["currency"] == "USD"
+    assert out["date"] == "2026-04-15"
+
+
+def test_shape_investment_transaction_missing_security():
+    out = shape_investment_transaction(
+        {"investment_transaction_id": "it2", "security_id": "gone", "date": "2026-01-01"}, {})
+    assert out["symbol"] is None
+    assert out["security_name"] is None
+    assert out["security_type"] is None
+
+
+def test_fetch_investment_transactions_paginates_and_shapes():
+    api = MagicMock()
+    sec = [{"security_id": "sec_a", "ticker_symbol": "AAPL", "name": "Apple Inc.", "type": "equity"}]
+    api.investments_transactions_get.side_effect = [
+        _FakeResp({"investment_transactions": [
+            {"investment_transaction_id": "it1", "account_id": "acc_inv",
+             "security_id": "sec_a", "date": "2026-04-01", "type": "buy",
+             "amount": 10.0, "iso_currency_code": "USD"}],
+            "securities": sec, "total_investment_transactions": 2}),
+        _FakeResp({"investment_transactions": [
+            {"investment_transaction_id": "it2", "account_id": "acc_inv",
+             "security_id": "sec_a", "date": "2026-04-02", "type": "sell",
+             "amount": -5.0, "iso_currency_code": "USD"}],
+            "securities": sec, "total_investment_transactions": 2}),
+    ]
+    out = fetch_investment_transactions(api, SecretStr("tok"), "2026-04-01", "2026-04-30")
+    assert [r["investment_transaction_id"] for r in out] == ["it1", "it2"]
+    assert out[0]["symbol"] == "AAPL"
+    assert api.investments_transactions_get.call_count == 2
+
+
+def test_fetch_investment_transactions_empty_stops_immediately():
+    api = MagicMock()
+    api.investments_transactions_get.return_value = _FakeResp(
+        {"investment_transactions": [], "securities": [], "total_investment_transactions": 0})
+    out = fetch_investment_transactions(api, SecretStr("tok"), "2026-04-01", "2026-04-30")
+    assert out == []
+    assert api.investments_transactions_get.call_count == 1

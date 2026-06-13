@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from datetime import date, timedelta
 
 from plaid.exceptions import ApiException
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
@@ -24,12 +25,33 @@ from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 import config_secrets
 import storage
-from plaid_client import ItemHealth, SecretStr, all_items, build_api, map_plaid_error
+from plaid_client import (
+    ItemHealth, SecretStr, all_items, build_api,
+    fetch_investment_transactions, map_plaid_error,
+)
 
 _log = logging.getLogger("plaid_mcp.sync")
 
 _MUTATION_ERROR = "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
 _MAX_RESTARTS = 3
+
+# Investments has no incremental cursor (unlike /transactions/sync), so each run
+# pulls a date window and relies on the investment_transaction_id PK to dedup.
+# Scheduled runs use a rolling window; --backfill-investments seeds deep history.
+_INVEST_LOOKBACK_DAYS = 45          # rolling window vs the ~4h schedule
+_INVEST_BACKFILL_DAYS = 730         # ~24 months: Plaid's maximum investments window
+
+
+def investment_sync_window(backfill: bool, today: date | None = None) -> tuple[str, str]:
+    """Return the ISO (start_date, end_date) for /investments/transactions/get.
+
+    Scheduled runs pull a rolling 45-day window (generous overlap with the ~4h
+    cadence; the overlap is free because the PK dedups). The one-shot backfill
+    pulls ~24 months, Plaid's maximum.
+    """
+    end = today or date.today()
+    span = _INVEST_BACKFILL_DAYS if backfill else _INVEST_LOOKBACK_DAYS
+    return (end - timedelta(days=span)).isoformat(), end.isoformat()
 
 
 def _sync_item_transactions(api, conn, env_key: str, token: SecretStr) -> dict:
@@ -124,7 +146,23 @@ def snapshot_item(api, conn, env_key: str, token: SecretStr, health: ItemHealth)
     return counts, warnings
 
 
-def run_sync(api=None, db_url: str | None = None) -> dict:
+def _sync_item_investments(
+    api, conn, env_key: str, token: SecretStr, window: tuple[str, str]
+) -> int:
+    """Fetch and persist investment transactions for one Item over ``window``.
+
+    Raises ApiException on Plaid failure (run_sync maps it to a warning with
+    scope=investment_transactions), so an Item lacking the investments-transactions
+    consent -- e.g. an investment-only item never authorized for it -- never sinks
+    the run. Returns the number of rows written.
+    """
+    start, end = window
+    rows = fetch_investment_transactions(api, token, start, end)
+    return storage.record_investment_transactions(conn, env_key, rows)
+
+
+def run_sync(api=None, db_url: str | None = None,
+             investments_backfill: bool = False) -> dict:
     """Sync transactions and record snapshots for every healthy Item.
 
     Returns per-item results plus warnings for unhealthy Items or API errors.
@@ -133,6 +171,7 @@ def run_sync(api=None, db_url: str | None = None) -> dict:
     """
     api = api or build_api()
     conn = storage.open_db(db_url)
+    inv_window = investment_sync_window(investments_backfill)
     items_out: list[dict] = []
     warnings: list[dict] = []
     try:
@@ -165,6 +204,25 @@ def run_sync(api=None, db_url: str | None = None) -> dict:
                     "scope": "snapshots",
                 })
                 entry["snapshots"] = None
+            # Only items with an investment account have an investments product to
+            # query; skip the rest to avoid pointless Plaid calls and warning noise.
+            # snapshot_item upserted accounts just above, so this read is current.
+            has_investments = conn.execute(
+                "SELECT 1 FROM accounts WHERE item_key = %s AND type = 'investment' LIMIT 1",
+                (env_key,),
+            ).fetchone() is not None
+            if has_investments:
+                try:
+                    entry["investment_transactions"] = _sync_item_investments(
+                        api, conn, env_key, token, inv_window
+                    )
+                except ApiException as e:
+                    warnings.append({
+                        "institution": health.institution_name,
+                        **map_plaid_error(e, health.institution_name)["error"],
+                        "scope": "investment_transactions",
+                    })
+                    entry["investment_transactions"] = None
             items_out.append(entry)
         tags = storage.apply_tags(conn)  # keep rule-based tags (e.g. delivery) current
         storage.apply_overrides(conn)    # re-apply user category corrections post-sync
@@ -198,7 +256,10 @@ def lambda_handler(event=None, context=None) -> dict:
             conn.close()
         _log.info("sync dry_run ok")
         return {"ok": True, "dry_run": True}
-    result = run_sync()
+    backfill = isinstance(event, dict) and bool(event.get("investments_backfill"))
+    if backfill:
+        _log.info("one-shot investments backfill requested (~24 months)")
+    result = run_sync(investments_backfill=backfill)
     items = result.get("items") or []
     warnings = result.get("warnings") or []
     _log.info(
@@ -221,7 +282,10 @@ def main() -> int:
     except ImportError:
         pass
     config_secrets.load_into_env()
-    result = run_sync()
+    backfill = "--backfill-investments" in sys.argv
+    if backfill:
+        _log.info("investments backfill mode: pulling ~24 months of history")
+    result = run_sync(investments_backfill=backfill)
     print(json.dumps(result, indent=2, default=str))
     return 0
 

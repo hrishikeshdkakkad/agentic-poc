@@ -10,7 +10,8 @@ TEST_DATABASE_URL = os.environ.get(
 )
 
 _ALL_TABLES = ("accounts", "transactions", "balance_snapshots",
-               "holdings_snapshots", "liabilities_snapshots", "sync_state",
+               "holdings_snapshots", "investment_transactions",
+               "liabilities_snapshots", "sync_state",
                "plaid_tokens", "transaction_tags", "category_overrides")
 
 

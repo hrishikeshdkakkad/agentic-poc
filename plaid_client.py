@@ -8,6 +8,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 
 import plaid
@@ -137,6 +138,8 @@ from plaid.exceptions import ApiException  # noqa: E402
 from plaid.model.item_get_request import ItemGetRequest  # noqa: E402
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest  # noqa: E402
 from plaid.model.country_code import CountryCode  # noqa: E402
+from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest  # noqa: E402
+from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions  # noqa: E402
 
 HealthStatus = Literal[
     "healthy",
@@ -310,3 +313,64 @@ def shape_holding(raw_holding: dict, securities: dict[str, dict]) -> dict:
         "price": raw_holding.get("institution_price"),
         "currency": raw_holding.get("iso_currency_code"),
     }
+
+
+def shape_investment_transaction(raw: dict, securities: dict[str, dict]) -> dict:
+    """Shape a raw Plaid investment transaction, joining security metadata.
+
+    This is the canonical record used by BOTH the live get_investment_transactions
+    tool and the persisted investment_transactions table, so the two never drift.
+    Looks up symbol/name/type by security_id (missing -> None). Keeps the
+    transaction's own ``name`` (e.g. "BUY AAPL") distinct from the security name.
+    """
+    sec = securities.get(raw.get("security_id"), {})
+    d = raw.get("date")
+    return {
+        "investment_transaction_id": raw.get("investment_transaction_id"),
+        "account_id": raw.get("account_id"),
+        "date": str(d) if d else None,
+        "name": raw.get("name"),
+        "type": raw.get("type"),
+        "subtype": raw.get("subtype"),
+        "amount": raw.get("amount"),
+        "quantity": raw.get("quantity"),
+        "price": raw.get("price"),
+        "fees": raw.get("fees"),
+        "currency": raw.get("iso_currency_code"),
+        "security_id": raw.get("security_id"),
+        "symbol": sec.get("ticker_symbol"),
+        "security_name": sec.get("name"),
+        "security_type": sec.get("type"),
+    }
+
+
+def fetch_investment_transactions(
+    api, token: SecretStr, start_date: str, end_date: str
+) -> list[dict]:
+    """Page through /investments/transactions/get and return shaped records.
+
+    Offset pagination (count=500 per page); securities from each page are joined
+    into its rows. Raises ApiException on Plaid failure so the caller can map it
+    to a warning -- one Item's failure must never sink the others
+    (warnings-not-exceptions). ``start_date``/``end_date`` are ISO YYYY-MM-DD.
+    """
+    out: list[dict] = []
+    offset = 0
+    while True:
+        resp = api.investments_transactions_get(
+            InvestmentsTransactionsGetRequest(
+                access_token=token.reveal(),
+                start_date=date.fromisoformat(start_date),
+                end_date=date.fromisoformat(end_date),
+                options=InvestmentsTransactionsGetRequestOptions(count=500, offset=offset),
+            )
+        ).to_dict()
+        secs = {s["security_id"]: s for s in resp.get("securities") or []}
+        batch = resp.get("investment_transactions") or []
+        for t in batch:
+            out.append(shape_investment_transaction(t, secs))
+        total = resp.get("total_investment_transactions") or 0
+        offset += len(batch)
+        if offset >= total or not batch:
+            break
+    return out

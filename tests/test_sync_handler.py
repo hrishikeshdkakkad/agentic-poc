@@ -7,7 +7,7 @@ import sync
 def test_handler_loads_config_then_summarizes(monkeypatch):
     calls = []
     monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: calls.append("load"))
-    monkeypatch.setattr(sync, "run_sync", lambda: {
+    monkeypatch.setattr(sync, "run_sync", lambda investments_backfill=False: {
         "items": [{"item_key": "CHASE"}, {"item_key": "AMEX"}],
         "warnings": [{"institution": "Old Bank", "status": "re-auth"}],
         "total_transactions_stored": 4242,
@@ -29,7 +29,7 @@ def test_handler_propagates_total_failure(monkeypatch):
     # A hard failure (e.g. DB down) must propagate so the schedule retries.
     monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: None)
 
-    def boom():
+    def boom(investments_backfill=False):
         raise RuntimeError("DATABASE_URL is not set")
 
     monkeypatch.setattr(sync, "run_sync", boom)
@@ -39,7 +39,7 @@ def test_handler_propagates_total_failure(monkeypatch):
 
 def test_handler_tolerates_empty_result(monkeypatch):
     monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: None)
-    monkeypatch.setattr(sync, "run_sync", lambda: {})
+    monkeypatch.setattr(sync, "run_sync", lambda investments_backfill=False: {})
     out = sync.lambda_handler(None, None)
     assert out["ok"] is True
     assert out["items_synced"] == 0
@@ -70,3 +70,21 @@ def test_handler_dry_run_pings_db_without_syncing(monkeypatch):
     assert out == {"ok": True, "dry_run": True}
     assert conn.executed == "SELECT 1"
     assert conn.closed is True
+
+
+def test_handler_passes_investments_backfill_flag(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: None)
+    monkeypatch.setattr(sync, "run_sync",
+                        lambda investments_backfill=False: seen.update(backfill=investments_backfill) or {})
+    sync.lambda_handler({"investments_backfill": True}, None)
+    assert seen["backfill"] is True
+
+
+def test_handler_defaults_to_no_backfill(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: None)
+    monkeypatch.setattr(sync, "run_sync",
+                        lambda investments_backfill=False: seen.update(backfill=investments_backfill) or {})
+    sync.lambda_handler({}, None)
+    assert seen["backfill"] is False

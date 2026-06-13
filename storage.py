@@ -92,6 +92,35 @@ CREATE TABLE IF NOT EXISTS holdings_snapshots (
     PRIMARY KEY (snapshot_date, account_id, security_id)
 );
 
+-- Investment activity from /investments/transactions/get (brokerage buys/sells,
+-- dividends, interest, fees, transfers). A SEPARATE stream from `transactions`
+-- (depository/credit cash-flow): different schema, no merchant/category, so
+-- apply_tags()/apply_overrides() deliberately do NOT touch it. Plaid offers no
+-- cursor for this product, so idempotency rides on investment_transaction_id
+-- (PK): re-pulling an overlapping date window upserts, never duplicates.
+CREATE TABLE IF NOT EXISTS investment_transactions (
+    investment_transaction_id TEXT PRIMARY KEY,
+    account_id TEXT,
+    item_key TEXT,
+    date DATE,
+    name TEXT,
+    type TEXT,
+    subtype TEXT,
+    amount DOUBLE PRECISION,
+    quantity DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    fees DOUBLE PRECISION,
+    security_id TEXT,
+    symbol TEXT,
+    security_name TEXT,
+    security_type TEXT,
+    currency TEXT,
+    updated_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_inv_tx_date ON investment_transactions (date);
+CREATE INDEX IF NOT EXISTS idx_inv_tx_account ON investment_transactions (account_id);
+CREATE INDEX IF NOT EXISTS idx_inv_tx_symbol ON investment_transactions (symbol);
+
 CREATE TABLE IF NOT EXISTS liabilities_snapshots (
     snapshot_date DATE,
     snapshot_ts TIMESTAMPTZ,
@@ -645,6 +674,62 @@ def record_holdings_snapshots(
             rows,
         )
     return len(rows)
+
+
+_INV_TX_UPSERT = """
+INSERT INTO investment_transactions
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+ON CONFLICT (investment_transaction_id) DO UPDATE SET
+    account_id = EXCLUDED.account_id,
+    item_key = EXCLUDED.item_key,
+    date = EXCLUDED.date,
+    name = EXCLUDED.name,
+    type = EXCLUDED.type,
+    subtype = EXCLUDED.subtype,
+    amount = EXCLUDED.amount,
+    quantity = EXCLUDED.quantity,
+    price = EXCLUDED.price,
+    fees = EXCLUDED.fees,
+    security_id = EXCLUDED.security_id,
+    symbol = EXCLUDED.symbol,
+    security_name = EXCLUDED.security_name,
+    security_type = EXCLUDED.security_type,
+    currency = EXCLUDED.currency,
+    updated_at = EXCLUDED.updated_at
+"""
+
+
+def record_investment_transactions(
+    conn: psycopg.Connection,
+    item_key: str,
+    rows: list[dict],
+) -> int:
+    """Upsert shaped investment-transaction records for one Item.
+
+    ``rows`` are canonical dicts from plaid_client.shape_investment_transaction.
+    Keyed by investment_transaction_id, so re-pulling an overlapping date window
+    is a no-op (Plaid offers no cursor for this product). Rows without an id are
+    skipped. Returns the number of rows written.
+    """
+    ts = _now()
+    values = []
+    for r in rows:
+        itid = r.get("investment_transaction_id")
+        if not itid:
+            continue
+        d = r.get("date")
+        values.append((
+            itid, r.get("account_id"), item_key,
+            str(d) if d else None,
+            r.get("name"), r.get("type"), r.get("subtype"),
+            r.get("amount"), r.get("quantity"), r.get("price"), r.get("fees"),
+            r.get("security_id"), r.get("symbol"),
+            r.get("security_name"), r.get("security_type"),
+            r.get("currency"), ts,
+        ))
+    if values:
+        conn.cursor().executemany(_INV_TX_UPSERT, values)
+    return len(values)
 
 
 def record_liabilities_snapshots(

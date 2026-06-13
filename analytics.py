@@ -235,6 +235,21 @@ _TABLE_DOCS: dict[str, dict] = {
             "cost_basis": "Total cost basis as reported by the institution",
         },
     },
+    "investment_transactions": {
+        "description": "Investment activity from /investments/transactions/get: brokerage "
+                       "buys/sells, dividends, interest, fees, transfers. A SEPARATE stream "
+                       "from `transactions` (depository/credit cash-flow) — no merchant or "
+                       "personal-finance category here; join securities via symbol. Keyed by "
+                       "investment_transaction_id (Plaid offers no cursor for this product, so "
+                       "the PK alone keeps re-pulls duplicate-free).",
+        "columns": {
+            "investment_transaction_id": "Primary key; upserts keep re-pulls duplicate-free",
+            "type": "buy | sell | cash | fee | transfer (Plaid investment-transaction type)",
+            "subtype": "Finer detail, e.g. dividend, interest, withdrawal, margin expense",
+            "amount": "Total value of the transaction (Plaid sign convention)",
+            "symbol": "Security ticker (NULL for pure cash/fee rows)",
+        },
+    },
     "liabilities_snapshots": {
         "description": "Dated debt detail: APRs, rates, minimum payments, outstanding balance.",
         "columns": {
@@ -373,6 +388,73 @@ def list_transactions(
         out.append(d)
     return {
         "transactions": out,
+        "total_matching": total,
+        "limit": limit,
+        "offset": offset,
+        "source": "history_db",
+    }
+
+
+def list_investment_transactions(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    account_id: str | None = None,
+    type: str | None = None,
+    symbol: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    db_url: str | None = None,
+) -> dict:
+    """List stored investment transactions with filters. Never calls Plaid.
+
+    Filters combine with AND: ISO ``date`` range, ``account_id``, ``type``
+    (buy/sell/cash/fee/transfer, case-insensitive) and ``symbol`` (ticker,
+    case-insensitive). Results are newest-first, paged via limit (max 500)/offset.
+    """
+    where: list[str] = []
+    params: list = []
+    if start_date:
+        where.append("date >= %s")
+        params.append(date.fromisoformat(start_date))
+    if end_date:
+        where.append("date <= %s")
+        params.append(date.fromisoformat(end_date))
+    if account_id:
+        where.append("account_id = %s")
+        params.append(account_id)
+    if type:
+        where.append("lower(coalesce(type, '')) = lower(%s)")
+        params.append(type)
+    if symbol:
+        where.append("upper(coalesce(symbol, '')) = upper(%s)")
+        params.append(symbol)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    limit = max(1, min(int(limit), _LIST_MAX))
+    offset = max(0, int(offset))
+
+    cols = ("investment_transaction_id", "account_id", "item_key", "date", "name",
+            "type", "subtype", "amount", "quantity", "price", "fees",
+            "security_id", "symbol", "security_name", "security_type", "currency")
+    conn = storage.open_readonly(db_url)
+    try:
+        total = conn.execute(
+            f"SELECT count(*) FROM investment_transactions {where_sql}", params
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {', '.join(cols)} FROM investment_transactions {where_sql} "
+            f"ORDER BY date DESC, investment_transaction_id LIMIT %s OFFSET %s",
+            params + [limit, offset],
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = dict(zip(cols, r))
+        d["date"] = str(d["date"]) if d["date"] else None
+        out.append(d)
+    return {
+        "investment_transactions": out,
         "total_matching": total,
         "limit": limit,
         "offset": offset,
