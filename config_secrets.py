@@ -41,8 +41,14 @@ def load_into_env(*, overwrite: bool = True) -> bool:
     # boto3 ships in the AWS Lambda runtime; import lazily so non-Lambda paths
     # (tests, CLI without PFM_CONFIG_PARAM) never require it installed.
     import boto3
+    from botocore.config import Config
 
-    resp = boto3.client("ssm").get_parameter(Name=param, WithDecryption=True)
+    # Bounded retries + short timeouts: a transient SSM/network blip at cold
+    # start retries instead of failing the whole invocation, but never hangs
+    # the function waiting on a wedged connection.
+    cfg = Config(retries={"max_attempts": 5, "mode": "standard"},
+                 connect_timeout=3, read_timeout=5)
+    resp = boto3.client("ssm", config=cfg).get_parameter(Name=param, WithDecryption=True)
     raw = resp["Parameter"]["Value"]
     try:
         values = json.loads(raw)

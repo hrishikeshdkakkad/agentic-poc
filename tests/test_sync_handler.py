@@ -44,3 +44,29 @@ def test_handler_tolerates_empty_result(monkeypatch):
     assert out["ok"] is True
     assert out["items_synced"] == 0
     assert out["warnings"] == []
+
+
+def test_handler_dry_run_pings_db_without_syncing(monkeypatch):
+    monkeypatch.setattr(sync.config_secrets, "load_into_env", lambda: None)
+
+    class _Conn:
+        def __init__(self):
+            self.executed = None
+            self.closed = False
+        def execute(self, q):
+            self.executed = q
+        def close(self):
+            self.closed = True
+
+    conn = _Conn()
+    monkeypatch.setattr(sync.storage, "open_readonly", lambda: conn)
+
+    def _no_sync():
+        raise AssertionError("run_sync must not run during dry_run")
+
+    monkeypatch.setattr(sync, "run_sync", _no_sync)
+
+    out = sync.lambda_handler({"dry_run": True}, None)
+    assert out == {"ok": True, "dry_run": True}
+    assert conn.executed == "SELECT 1"
+    assert conn.closed is True

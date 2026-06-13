@@ -187,6 +187,17 @@ def lambda_handler(event=None, context=None) -> dict:
     """
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
     config_secrets.load_into_env()
+    if isinstance(event, dict) and event.get("dry_run"):
+        # Non-mutating health check (used by CI smoke after deploy): prove the
+        # config loaded from SSM and the history DB is reachable on the
+        # read-only path, without running a sync.
+        conn = storage.open_readonly()
+        try:
+            conn.execute("SELECT 1")
+        finally:
+            conn.close()
+        _log.info("sync dry_run ok")
+        return {"ok": True, "dry_run": True}
     result = run_sync()
     items = result.get("items") or []
     warnings = result.get("warnings") or []

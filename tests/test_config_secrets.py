@@ -22,43 +22,60 @@ def _reset(monkeypatch):
     os.environ.update(snapshot)
 
 
-def _fake_boto3(value):
-    """A stand-in boto3 module whose ssm client returns `value` verbatim."""
-    ssm = types.SimpleNamespace(
-        get_parameter=lambda Name, WithDecryption: {"Parameter": {"Value": value}}
-    )
-    return types.SimpleNamespace(client=lambda service: ssm)
+def _inject(monkeypatch, get_parameter):
+    """Install fake boto3 + botocore.config modules (neither need be installed).
+
+    `get_parameter` is a callable (Name=, WithDecryption=) -> response dict.
+    The fake client accepts the `config=` kwarg the loader now passes.
+    """
+    ssm = types.SimpleNamespace(get_parameter=get_parameter)
+    monkeypatch.setitem(sys.modules, "boto3",
+                        types.SimpleNamespace(client=lambda service, **kw: ssm))
+    botocore = types.ModuleType("botocore")
+    bcfg = types.ModuleType("botocore.config")
+    bcfg.Config = lambda **kw: object()
+    monkeypatch.setitem(sys.modules, "botocore", botocore)
+    monkeypatch.setitem(sys.modules, "botocore.config", bcfg)
 
 
 def test_noop_when_param_unset(monkeypatch):
-    # No PFM_CONFIG_PARAM -> returns False and never imports boto3.
     monkeypatch.setitem(sys.modules, "boto3", None)  # would explode if used
     assert config_secrets.load_into_env() is False
 
 
 def test_populates_env_from_ssm(monkeypatch):
+    import os
     cfg = {"PLAID_SECRET": "shh", "DATABASE_URL": "postgres://x", "PLAID_ENV": "production"}
-    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(json.dumps(cfg)))
+    _inject(monkeypatch, lambda Name, WithDecryption: {"Parameter": {"Value": json.dumps(cfg)}})
     monkeypatch.setenv("PFM_CONFIG_PARAM", "/personal-finance-mcp/config")
     for k in cfg:
         monkeypatch.delenv(k, raising=False)
-
     assert config_secrets.load_into_env() is True
-    import os
     assert os.environ["PLAID_SECRET"] == "shh"
     assert os.environ["DATABASE_URL"] == "postgres://x"
+
+
+def test_with_decryption_is_requested(monkeypatch):
+    seen = {}
+
+    def gp(Name, WithDecryption):
+        seen["decrypt"] = WithDecryption
+        return {"Parameter": {"Value": "{}"}}
+
+    _inject(monkeypatch, gp)
+    monkeypatch.setenv("PFM_CONFIG_PARAM", "/p")
+    config_secrets.load_into_env()
+    assert seen["decrypt"] is True  # must decrypt the SecureString
 
 
 def test_is_idempotent(monkeypatch):
     calls = {"n": 0}
 
-    def client(service):
+    def gp(Name, WithDecryption):
         calls["n"] += 1
-        return types.SimpleNamespace(
-            get_parameter=lambda Name, WithDecryption: {"Parameter": {"Value": "{}"}}
-        )
+        return {"Parameter": {"Value": "{}"}}
 
-    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=client))
+    _inject(monkeypatch, gp)
     monkeypatch.setenv("PFM_CONFIG_PARAM", "/p")
     config_secrets.load_into_env()
     config_secrets.load_into_env()
@@ -66,23 +83,23 @@ def test_is_idempotent(monkeypatch):
 
 
 def test_overwrite_false_preserves_existing(monkeypatch):
-    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(json.dumps({"PLAID_ENV": "sandbox"})))
+    import os
+    _inject(monkeypatch, lambda Name, WithDecryption: {"Parameter": {"Value": json.dumps({"PLAID_ENV": "sandbox"})}})
     monkeypatch.setenv("PFM_CONFIG_PARAM", "/p")
     monkeypatch.setenv("PLAID_ENV", "production")
     config_secrets.load_into_env(overwrite=False)
-    import os
     assert os.environ["PLAID_ENV"] == "production"
 
 
 def test_raises_on_bad_json(monkeypatch):
-    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3("not json"))
+    _inject(monkeypatch, lambda Name, WithDecryption: {"Parameter": {"Value": "not json"}})
     monkeypatch.setenv("PFM_CONFIG_PARAM", "/p")
     with pytest.raises(RuntimeError, match="not valid JSON"):
         config_secrets.load_into_env()
 
 
 def test_raises_when_not_object(monkeypatch):
-    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(json.dumps(["a", "b"])))
+    _inject(monkeypatch, lambda Name, WithDecryption: {"Parameter": {"Value": json.dumps(["a", "b"])}})
     monkeypatch.setenv("PFM_CONFIG_PARAM", "/p")
     with pytest.raises(RuntimeError, match="JSON object"):
         config_secrets.load_into_env()

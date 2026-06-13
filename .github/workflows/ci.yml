@@ -85,6 +85,16 @@ jobs:
           --function-name personal-finance-mcp-sync
           --zip-file fileb://lambda.zip
       - run: aws lambda wait function-updated --function-name personal-finance-mcp-sync
+      # Smoke the sync function with a non-mutating dry run: proves it loads
+      # config from SSM (KMS) and reaches the DB on real cold-start code —
+      # the sync path otherwise has no post-deploy verification.
+      - name: Smoke sync (dry run)
+        run: |
+          aws lambda invoke --function-name personal-finance-mcp-sync \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"dry_run":true}' /tmp/sync.json >/tmp/meta.json
+          cat /tmp/meta.json; echo; cat /tmp/sync.json; echo
+          python -c "import json,sys; m=json.load(open('/tmp/meta.json')); d=json.load(open('/tmp/sync.json')); sys.exit(0 if m.get('FunctionError') is None and d.get('ok') and d.get('dry_run') else 1)"
 
   smoke:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
