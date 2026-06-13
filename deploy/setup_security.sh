@@ -19,9 +19,10 @@ SERVER_ROLE=personal-finance-mcp-lambda
 SYNC_ROLE=personal-finance-mcp-sync-lambda
 SCHED_ROLE=personal-finance-mcp-scheduler
 SYNC_FUNC=personal-finance-mcp-sync
-# Shared-account admins to fence out of the finance secrets (edit if the set
-# of other admins changes). Root and the two Lambda roles are NOT in this list.
-DENY_USERS=("sumeetaher" "tilaksharma")
+# The key is locked to an ALLOWLIST: only the account owner (root) and the two
+# app Lambda roles may touch it; every other principal (the other admins, the
+# SAM pipeline user, anyone created later) is denied by a Principal:* Deny with
+# a NotLike condition. Nothing to enumerate or keep in sync.
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 echo "account: $ACCOUNT  region: $REGION"
@@ -56,29 +57,54 @@ KEY_ARN="arn:aws:kms:${REGION}:${ACCOUNT}:key/${KEY_ID}"
 echo "CMK: $KEY_ID"
 
 # --- 3. key policy: root full; app roles decrypt; named admins DENIED --------
-DENY_ARNS=$(printf '"arn:aws:iam::%s:user/%s",' "$ACCOUNT" "${DENY_USERS[@]}")
-DENY_ARNS="[${DENY_ARNS%,}]"
+# Allowlist for the Deny-everyone-else statement: the account owner (root, who
+# manages the key and can always recover it) plus the two app Lambda roles. Both
+# the IAM role ARN and its assumed-role session form are listed so the match
+# holds regardless of how aws:PrincipalArn renders for a role session.
+ALLOW_ARNS=$(cat <<JSON
+[
+  "arn:aws:iam::${ACCOUNT}:root",
+  "${SERVER_ROLE_ARN}",
+  "${SYNC_ROLE_ARN}",
+  "arn:aws:sts::${ACCOUNT}:assumed-role/${SERVER_ROLE}/*",
+  "arn:aws:sts::${ACCOUNT}:assumed-role/${SYNC_ROLE}/*"
+]
+JSON
+)
 KEYPOLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
   "Id": "personal-finance-mcp-key",
   "Statement": [
-    {"Sid":"EnableRootAndIAMDelegation","Effect":"Allow",
+    {"Sid":"EnableRootManagement","Effect":"Allow",
      "Principal":{"AWS":"arn:aws:iam::${ACCOUNT}:root"},
      "Action":"kms:*","Resource":"*"},
     {"Sid":"AllowAppLambdaRolesDecrypt","Effect":"Allow",
      "Principal":{"AWS":["${SERVER_ROLE_ARN}","${SYNC_ROLE_ARN}"]},
-     "Action":["kms:Decrypt","kms:DescribeKey"],"Resource":"*"},
-    {"Sid":"DenyOtherAccountAdmins","Effect":"Deny",
-     "Principal":{"AWS":${DENY_ARNS}},
-     "Action":"kms:*","Resource":"*"}
+     "Action":["kms:Decrypt","kms:DescribeKey","kms:GenerateDataKey"],"Resource":"*"},
+    {"Sid":"DenyAllExceptOwnerAndApp","Effect":"Deny",
+     "Principal":"*",
+     "Action":"kms:*","Resource":"*",
+     "Condition":{"StringNotLike":{"aws:PrincipalArn":${ALLOW_ARNS}}}}
   ]
 }
 EOF
 )
-aws kms put-key-policy --region "$REGION" --key-id "$KEY_ID" \
-    --policy-name default --policy "$KEYPOLICY"
-echo "key policy applied (root=full, app roles=decrypt, DENY: ${DENY_USERS[*]})"
+# A freshly-created Lambda role can lag IAM propagation; KMS then rejects the
+# policy as "invalid principals". Retry briefly.
+for attempt in 1 2 3 4 5 6; do
+    if aws kms put-key-policy --region "$REGION" --key-id "$KEY_ID" \
+        --policy-name default --policy "$KEYPOLICY" 2>deploy/.kms-err; then
+        break
+    fi
+    if grep -q "invalid principals" deploy/.kms-err && [ "$attempt" -lt 6 ]; then
+        echo "  waiting for IAM principal propagation (attempt $attempt)"; sleep 6
+    else
+        cat deploy/.kms-err >&2; rm -f deploy/.kms-err; exit 1
+    fi
+done
+rm -f deploy/.kms-err
+echo "key policy applied (root=manage+use, app roles=decrypt, EVERYONE ELSE denied)"
 
 # --- 4. push .env config into SSM SecureString under the CMK -----------------
 # Secret never touches argv: a chmod-600 cli-input-json temp file is used.

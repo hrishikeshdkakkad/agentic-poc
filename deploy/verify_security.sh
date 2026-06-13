@@ -10,7 +10,6 @@ ALIAS=alias/personal-finance-mcp
 PARAM=/personal-finance-mcp/config
 SERVER=personal-finance-mcp
 SYNC=personal-finance-mcp-sync
-DENY_USERS=("sumeetaher" "tilaksharma")
 SECRET_KEYS=("PLAID_SECRET" "FERNET_KEY" "DATABASE_URL" "PLAID_CLIENT_ID")
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -18,7 +17,7 @@ fail=0
 pass() { echo "  PASS  $1"; }
 bad()  { echo "  FAIL  $1"; fail=1; }
 
-echo "== KMS key policy denies the other admins =="
+echo "== KMS key policy locks the key to owner + app only =="
 KEY_ID=$(aws kms list-aliases --region "$REGION" \
     --query "Aliases[?AliasName=='${ALIAS}'].TargetKeyId | [0]" --output text)
 if [ -z "$KEY_ID" ] || [ "$KEY_ID" = "None" ]; then
@@ -26,11 +25,24 @@ if [ -z "$KEY_ID" ] || [ "$KEY_ID" = "None" ]; then
 else
     POL=$(aws kms get-key-policy --region "$REGION" --key-id "$KEY_ID" \
         --policy-name default --query Policy --output text)
-    DENY=$(printf '%s' "$POL" | python3 -c 'import json,sys; p=json.load(sys.stdin); print(next((s for s in p["Statement"] if s["Sid"]=="DenyOtherAccountAdmins"),""))')
-    for u in "${DENY_USERS[@]}"; do
-        if printf '%s' "$DENY" | grep -q "user/$u"; then pass "deny includes $u"; else bad "deny missing $u"; fi
-    done
-    printf '%s' "$DENY" | grep -q "'Effect': 'Deny'" && pass "explicit Deny present" || bad "no Deny effect"
+    if printf '%s' "$POL" | python3 -c '
+import json, sys
+p = json.load(sys.stdin)
+d = next((s for s in p["Statement"] if s.get("Sid") == "DenyAllExceptOwnerAndApp"), None)
+assert d, "no DenyAllExceptOwnerAndApp statement"
+assert d["Effect"] == "Deny" and d["Principal"] == "*", "deny shape wrong"
+allow = d["Condition"]["StringNotLike"]["aws:PrincipalArn"]
+allow = allow if isinstance(allow, list) else [allow]
+assert any(x.endswith(":root") for x in allow), "root not allowlisted"
+assert any("role/personal-finance-mcp-lambda" in x for x in allow), "server role missing"
+assert any("role/personal-finance-mcp-sync-lambda" in x for x in allow), "sync role missing"
+for a in ("sumeetaher", "tilaksharma"):
+    assert not any("user/" + a in x for x in allow), a + " is allowlisted (should be denied)"
+'; then
+        pass "Deny-all-except-owner+app; root+roles allowed; admins excluded"
+    else
+        bad "key policy not locked to owner+app (see error above)"
+    fi
 fi
 
 echo "== SSM config is a SecureString under the CMK =="
