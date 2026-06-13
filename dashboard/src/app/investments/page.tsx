@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSWRConfig } from "swr";
 import { useTool } from "@/lib/hooks";
 import { linkFetch } from "@/lib/api";
 import { fmtDate, pct, usd } from "@/lib/format";
@@ -33,12 +34,14 @@ type InvTxs = {
   total_matching?: number;
 };
 
-const ACTIVITY_LIMIT = 100;
+const ACTIVITY_PAGE = 50;
 
 export default function InvestmentsPage() {
   const portfolio = useTool<Portfolio>("get_portfolio_analysis");
-  // Persisted, zero-Plaid read from the local history store — instant, full history.
-  const activity = useTool<InvTxs>("list_investment_transactions", { limit: ACTIVITY_LIMIT });
+  const { mutate } = useSWRConfig();
+  // Persisted, zero-Plaid read from the local history store — instant, paged.
+  const [offset, setOffset] = useState(0);
+  const activity = useTool<InvTxs>("list_investment_transactions", { limit: ACTIVITY_PAGE, offset });
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState("");
 
@@ -48,7 +51,9 @@ export default function InvestmentsPage() {
     try {
       await linkFetch("sync", { method: "POST" });
       setRefreshMsg("");
-      await activity.mutate();
+      setOffset(0);
+      // Revalidate every cached page of this tool, not just the one in view.
+      await mutate((key) => Array.isArray(key) && key[0] === "tool:list_investment_transactions");
     } catch (e) {
       setRefreshMsg(e instanceof Error ? e.message : "sync failed");
     } finally {
@@ -153,11 +158,10 @@ export default function InvestmentsPage() {
           </button>
         }>
         {activity.data ? (
-          txs.length ? (
+          total ? (
             <>
               <div className="mb-2 text-xs text-mut">
-                Showing {txs.length}{total > txs.length ? ` of ${total.toLocaleString()}` : ""} stored
-                {" "}— trades, dividends &amp; fees from your synced history (instant, no Plaid call).
+                Trades, dividends &amp; fees from your synced history — instant, no Plaid call.
               </div>
               <table className="w-full text-sm">
                 <thead>
@@ -178,6 +182,13 @@ export default function InvestmentsPage() {
                   ))}
                 </tbody>
               </table>
+              <div className="mt-4 flex items-center justify-between text-sm">
+                <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - ACTIVITY_PAGE))}
+                  className="rounded-lg border border-line px-3 py-1.5 font-semibold disabled:opacity-40">← Prev</button>
+                <span className="text-mut">{offset + 1}–{Math.min(offset + ACTIVITY_PAGE, total)} of {total.toLocaleString()}</span>
+                <button disabled={offset + ACTIVITY_PAGE >= total} onClick={() => setOffset(offset + ACTIVITY_PAGE)}
+                  className="rounded-lg border border-line px-3 py-1.5 font-semibold disabled:opacity-40">Next →</button>
+              </div>
             </>
           ) : (
             <div className="text-sm text-mut">
