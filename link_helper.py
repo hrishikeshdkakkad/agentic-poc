@@ -308,6 +308,22 @@ def exchange(req: ExchangeReq) -> dict:
     return {"institution": ins_name, "item_id": item_id, "env_key": env_key, "stored": "encrypted"}
 
 
+class ResetReq(BaseModel):
+    env_key: str
+
+
+@app.post("/reset-item")
+def reset_item_endpoint(req: ResetReq) -> dict:
+    """Retire a Plaid Item and wipe its local state, ready for a fresh re-link."""
+    from dataclasses import asdict
+    import reset_item
+    try:
+        result = reset_item.reset_item(req.env_key, confirm=True, api=api)
+        return {"ok": True, **asdict(result)}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "env_key": req.env_key}
+
+
 INDEX_HTML = """<!doctype html>
 <html>
 <head>

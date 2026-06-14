@@ -93,3 +93,20 @@ def test_create_link_token_plain_reauth_omits_investments(fake_env_tokens):
     assert resp.status_code == 200
     body = _sent_body(link_helper)
     assert "additional_consented_products" not in body
+
+
+def test_reset_item_endpoint(fake_env_tokens, monkeypatch):
+    link_helper = _reload_link_helper_with_mock_api()
+    import reset_item
+    from reset_item import ResetResult
+    monkeypatch.setattr(
+        reset_item, "reset_item",
+        lambda env_key, **kw: ResetResult(env_key, "Chase", {"transactions": 5},
+                                          "resets/CHASE-x.json", "removed", ["url"]),
+    )
+    client = TestClient(link_helper.app)
+    resp = client.post("/reset-item", json={"env_key": "CHASE"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["env_key"] == "CHASE"
+    assert body["plaid_removed"] == "removed"
