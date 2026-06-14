@@ -63,3 +63,36 @@ def preview_reset(env_key: str, *, db_url: str | None = None) -> dict:
     finally:
         conn.close()
     return counts
+
+
+def _rows(conn, sql: str, params: tuple) -> list[dict]:
+    cur = conn.execute(sql, params)
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _backup(env_key: str, db_url: str | None, now) -> str:
+    key = secure_tokens._norm(env_key)
+    conn = storage.open_readonly(db_url)
+    try:
+        tables = {
+            "transaction_tags": _rows(
+                conn,
+                "SELECT t.* FROM transaction_tags t "
+                "JOIN transactions x ON t.transaction_id = x.transaction_id "
+                "WHERE x.item_key = %s",
+                (key,),
+            )
+        }
+        for table in _ITEM_TABLES:
+            tables[table] = _rows(
+                conn, f"SELECT * FROM {table} WHERE item_key = %s", (key,)
+            )
+    finally:
+        conn.close()
+    data = {"env_key": key, "backed_up_at": now.isoformat(), "tables": tables}
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    path = os.path.join(_BACKUP_DIR, f"{key}-{now:%Y-%m-%d-%H%M%S}.json")
+    with open(path, "w") as fh:
+        json.dump(data, fh, indent=2, default=str)
+    return path

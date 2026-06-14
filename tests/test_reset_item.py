@@ -81,3 +81,22 @@ def test_remove_token_targets_explicit_url(db):
         "SELECT count(*) FROM plaid_tokens WHERE env_key='CHASE'"
     ).fetchone()[0]
     assert left == 0
+
+
+from datetime import datetime
+
+
+def test_backup_writes_all_item_rows(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # so resets/ is created under tmp
+    _seed_item(db, "CHASE")
+    path = reset_item._backup("CHASE", os.environ["DATABASE_URL"],
+                              datetime(2026, 6, 14, 10, 45, 0))
+    assert path == os.path.join("resets", "CHASE-2026-06-14-104500.json")
+    data = json.loads(open(path).read())
+    assert data["env_key"] == "CHASE"
+    assert len(data["tables"]["transactions"]) == 1
+    assert len(data["tables"]["transaction_tags"]) == 1
+    assert data["tables"]["transactions"][0]["name"] == "Coffee"
+    # The token is a secret and must never be written to a backup.
+    assert "plaid_tokens" not in data["tables"]
+    assert "token" not in json.dumps(data).lower()
