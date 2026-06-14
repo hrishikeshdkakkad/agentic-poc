@@ -201,3 +201,29 @@ def reset_all(*, confirm: bool = False, api=None, db_url: str | None = None,
                        tokens_url=tokens_url, now=now)
         )
     return results
+
+
+def restore_from_backup(path: str, *, db_url: str | None = None) -> dict:
+    db_url = db_url or storage.database_url()
+    with open(path) as fh:
+        data = json.load(fh)
+    conn = storage.open_db(db_url)
+    counts: dict = {}
+    try:
+        with conn.transaction():
+            for table, rows in data["tables"].items():
+                inserted = 0
+                for row in rows:
+                    cols = list(row.keys())
+                    collist = ", ".join(cols)
+                    placeholders = ", ".join(["%s"] * len(cols))
+                    cur = conn.execute(
+                        f"INSERT INTO {table} ({collist}) VALUES ({placeholders}) "
+                        f"ON CONFLICT DO NOTHING",
+                        tuple(row[c] for c in cols),
+                    )
+                    inserted += cur.rowcount
+                counts[table] = inserted
+    finally:
+        conn.close()
+    return counts

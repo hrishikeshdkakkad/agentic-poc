@@ -211,3 +211,19 @@ def test_reset_all_resets_every_connection(db, tmp_path, monkeypatch):
     results = reset_item.reset_all(confirm=True, api=MagicMock())
     assert {r.env_key for r in results} == {"CHASE", "SOFI"}
     assert db.execute("SELECT count(*) FROM transactions").fetchone()[0] == 0
+
+
+def test_restore_reinserts_data_rows(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    path = reset_item._backup("CHASE", os.environ["DATABASE_URL"],
+                              datetime(2026, 6, 14, 10, 45, 0))
+    db.execute("DELETE FROM transaction_tags WHERE transaction_id='CHASE_tx'")
+    for table in ("transactions", "accounts", "balance_snapshots",
+                  "holdings_snapshots", "liabilities_snapshots",
+                  "investment_transactions", "sync_state"):
+        db.execute(f"DELETE FROM {table} WHERE item_key='CHASE'")
+    counts = reset_item.restore_from_backup(path)
+    assert counts["transactions"] == 1
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM transaction_tags WHERE transaction_id='CHASE_tx'").fetchone()[0] == 1
