@@ -227,3 +227,16 @@ def test_restore_reinserts_data_rows(db, tmp_path, monkeypatch):
     assert counts["transactions"] == 1
     assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1
     assert db.execute("SELECT count(*) FROM transaction_tags WHERE transaction_id='CHASE_tx'").fetchone()[0] == 1
+
+
+def test_cli_preview_prints_counts_without_confirm(db, capsys, monkeypatch):
+    _seed_item(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("a")})
+    rc = reset_item.main(["CHASE"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DRY RUN" in out
+    assert "transactions" in out
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1

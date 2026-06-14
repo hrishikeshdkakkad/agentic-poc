@@ -227,3 +227,53 @@ def restore_from_backup(path: str, *, db_url: str | None = None) -> dict:
     finally:
         conn.close()
     return counts
+
+
+def _print_result(result: ResetResult) -> None:
+    tag = "DRY RUN" if result.dry_run else "RESET"
+    print(f"[{tag}] {result.env_key} ({result.institution or '—'})")
+    for table, n in result.deleted.items():
+        print(f"    {table:24} {n}")
+    if not result.dry_run:
+        print(f"    plaid_item: {result.plaid_removed}")
+        print(f"    token_cleared_from: {len(result.token_cleared)} store(s)")
+        print(f"    backup: {result.backup_path}")
+    else:
+        print("    (no changes — pass --confirm to execute)")
+
+
+def main(argv: list | None = None) -> int:
+    import argparse
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Reset a Plaid Item for re-link.")
+    parser.add_argument("target", nargs="?",
+                        help="env key (e.g. CHASE) or 'restore'")
+    parser.add_argument("backup", nargs="?", help="backup file (with 'restore')")
+    parser.add_argument("--all", action="store_true", help="reset every connection")
+    parser.add_argument("--confirm", action="store_true", help="execute (default is dry run)")
+    args = parser.parse_args(argv)
+
+    if args.target == "restore":
+        if not args.backup:
+            parser.error("restore requires a backup file path")
+        counts = restore_from_backup(args.backup)
+        print(f"restored from {args.backup}: {counts}")
+        return 0
+
+    if args.all:
+        for result in reset_all(confirm=args.confirm):
+            _print_result(result)
+        return 0
+
+    if not args.target:
+        parser.error("provide an env key (e.g. CHASE), --all, or 'restore <file>'")
+
+    _print_result(reset_item(args.target, confirm=args.confirm))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
