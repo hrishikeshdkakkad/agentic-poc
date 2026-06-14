@@ -65,3 +65,19 @@ def test_preview_counts_rows_for_item(db):
 def test_preview_normalizes_prefixed_key(db):
     _seed_item(db, "CHASE")
     assert reset_item.preview_reset("PLAID_TOKEN_chase")["transactions"] == 1
+
+
+import secure_tokens
+
+
+def test_remove_token_targets_explicit_url(db):
+    # Both DATABASE_URL and PFM_TOKENS_DATABASE_URL point at the test DB here.
+    db.execute(
+        "INSERT INTO plaid_tokens (env_key, token_ciphertext) VALUES ('CHASE','ct')"
+    )
+    removed = secure_tokens.remove_token("CHASE", url=os.environ["DATABASE_URL"])
+    assert removed is True
+    left = db.execute(
+        "SELECT count(*) FROM plaid_tokens WHERE env_key='CHASE'"
+    ).fetchone()[0]
+    assert left == 0
