@@ -43,6 +43,7 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.products import Products
 
 from plaid_client import all_items, build_api
@@ -256,6 +257,11 @@ def create_link_token(req: CreateReq) -> dict:
             optional_products=[Products("liabilities")],
             country_codes=[CountryCode("US")],
             language="en",
+            # Request Plaid's maximum 24 months of history (default is 90 days).
+            # This is fixed at Item creation and can never be raised afterwards, so
+            # existing Items keep their 90-day seed -- only Items linked from now on,
+            # or re-linked as a fresh Item, get the deep backfill.
+            transactions=LinkTokenTransactions(days_requested=730),
         )
     return api.link_token_create(body).to_dict()
 

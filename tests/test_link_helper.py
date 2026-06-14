@@ -58,6 +58,19 @@ def test_create_link_token_new_link_requires_investments(fake_env_tokens):
     assert body["products"] == ["transactions"]
     assert body["required_if_supported_products"] == ["investments"]
     assert "investments" not in body.get("optional_products", [])
+    # New Items request the full 24 months Plaid allows (default is only 90 days);
+    # days_requested is fixed at Item creation and can never be raised afterwards.
+    assert body["transactions"]["days_requested"] == 730
+
+
+def test_create_link_token_update_mode_omits_days_requested(fake_env_tokens):
+    """days_requested cannot be set in update mode -- it's immutable once Transactions
+    is on the Item, so we must not send it (Plaid would reject the request)."""
+    link_helper = _reload_link_helper_with_mock_api()
+    client = TestClient(link_helper.app)
+    resp = client.post("/create-link-token", json={"update_access_token": "access-prod-x"})
+    assert resp.status_code == 200
+    assert "transactions" not in _sent_body(link_helper)
 
 
 def test_create_link_token_update_mode_adds_investments_when_requested(fake_env_tokens):
