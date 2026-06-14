@@ -35,4 +35,13 @@ describe("/api/link proxy", () => {
     expect(res.status).toBe(502);
     expect(await res.json()).toMatchObject({ service: "link_helper" });
   });
+
+  it("allows the reset-item route (POST)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const res = await POST(
+      new Request("http://x/api/link/reset-item", { method: "POST", body: "{}" }),
+      ctx("reset-item"),
+    );
+    expect(res.status).not.toBe(404);
+  });
 });
