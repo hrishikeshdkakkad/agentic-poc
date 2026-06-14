@@ -65,12 +65,20 @@ export default function Connections() {
       `pull 24 months.`)) return;
     setResetting(envKey);
     try {
-      await linkFetch(`reset-item`, {
+      // The endpoint returns HTTP 200 with {ok:false} on a Plaid/DB error
+      // (warnings-not-exceptions convention), so guard on `ok` before
+      // re-linking — otherwise a failed reset would leave the old Item alive
+      // while we create a new one, and the Lambda would sync both (double-count).
+      const d = await linkFetch<{ ok: boolean; error?: string }>(`reset-item`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ env_key: envKey }),
       });
       status.mutate();
+      if (!d.ok) {
+        setLinkOut(`Reset failed for ${name}: ${d.error ?? "unknown error"}`);
+        return;
+      }
       await linkBank(); // chain straight into the fresh link flow
     } finally {
       setResetting(null);

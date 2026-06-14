@@ -240,3 +240,23 @@ def test_cli_preview_prints_counts_without_confirm(db, capsys, monkeypatch):
     assert "DRY RUN" in out
     assert "transactions" in out
     assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1
+
+
+def test_reset_clears_token_from_both_stores(db, tmp_path, monkeypatch):
+    # Production splits the token store (PFM_TOKENS_DATABASE_URL) from the
+    # history store (DATABASE_URL/Neon). A reset must clear the token from BOTH,
+    # or the Lambda keeps syncing a removed Item from the surviving Neon copy.
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("a")})
+    cleared_urls = []
+    monkeypatch.setattr(reset_item.secure_tokens, "remove_token",
+                        lambda key, url=None: cleared_urls.append(url) or True)
+    db_url = os.environ["DATABASE_URL"]
+    tokens_url = "postgresql://separate-local-token-store/db"
+    reset_item.reset_item("CHASE", confirm=True, api=MagicMock(),
+                          db_url=db_url, tokens_url=tokens_url)
+    # Both distinct stores cleared, deduped, order preserved (tokens store first).
+    assert cleared_urls == [tokens_url, db_url]

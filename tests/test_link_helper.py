@@ -108,5 +108,6 @@ def test_reset_item_endpoint(fake_env_tokens, monkeypatch):
     resp = client.post("/reset-item", json={"env_key": "CHASE"})
     assert resp.status_code == 200
     body = resp.json()
+    assert body["ok"] is True
     assert body["env_key"] == "CHASE"
     assert body["plaid_removed"] == "removed"
