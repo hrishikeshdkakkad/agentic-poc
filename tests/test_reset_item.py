@@ -100,3 +100,100 @@ def test_backup_writes_all_item_rows(db, tmp_path, monkeypatch):
     # The token is a secret and must never be written to a backup.
     assert "plaid_tokens" not in data["tables"]
     assert "token" not in json.dumps(data).lower()
+
+
+from unittest.mock import MagicMock
+
+from plaid.exceptions import ApiException
+
+
+def _api_raising(error_code):
+    api = MagicMock()
+    exc = ApiException(status=400)
+    exc.body = json.dumps({"error_code": error_code})
+    api.item_remove.side_effect = exc
+    return api
+
+
+def _store_token(conn, key, url_env="DATABASE_URL"):
+    conn.execute(
+        "INSERT INTO plaid_tokens (env_key, token_ciphertext) VALUES (%s,%s)"
+        " ON CONFLICT (env_key) DO NOTHING",
+        (key, "ct-unused-because-api-mocked"),
+    )
+
+
+def test_reset_wipes_target_and_preserves_others(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    _seed_item(db, "SOFI")
+    _store_token(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("access-prod-x")})
+    api = MagicMock()  # item_remove succeeds
+
+    result = reset_item.reset_item("CHASE", confirm=True, api=api)
+
+    assert result.plaid_removed == "removed"
+    api.item_remove.assert_called_once()
+    for table in ("transactions", "accounts", "balance_snapshots",
+                  "holdings_snapshots", "liabilities_snapshots",
+                  "investment_transactions", "sync_state"):
+        assert db.execute(f"SELECT count(*) FROM {table} WHERE item_key='CHASE'").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM transaction_tags WHERE transaction_id='CHASE_tx'").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM plaid_tokens WHERE env_key='CHASE'").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='SOFI'").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM accounts WHERE item_key='SOFI'").fetchone()[0] == 1
+    assert os.path.exists(result.backup_path)
+
+
+def test_reset_dry_run_changes_nothing(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("access-prod-x")})
+    result = reset_item.reset_item("CHASE", confirm=False, api=MagicMock())
+    assert result.dry_run is True
+    assert result.deleted["transactions"] == 1
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1
+
+
+def test_reset_aborts_when_plaid_remove_fails(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    _store_token(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("access-prod-x")})
+    api = _api_raising("INTERNAL_SERVER_ERROR")
+    with pytest.raises(ApiException):
+        reset_item.reset_item("CHASE", confirm=True, api=api)
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM plaid_tokens WHERE env_key='CHASE'").fetchone()[0] == 1
+
+
+def test_reset_treats_item_not_found_as_done(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    _store_token(db, "CHASE")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("access-prod-x")})
+    api = _api_raising("ITEM_NOT_FOUND")
+    result = reset_item.reset_item("CHASE", confirm=True, api=api)
+    assert result.plaid_removed == "already_absent"
+    assert db.execute("SELECT count(*) FROM transactions WHERE item_key='CHASE'").fetchone()[0] == 0
+
+
+def test_reset_refuses_env_var_token(db, monkeypatch):
+    monkeypatch.setenv("PLAID_TOKEN_CHASE", "access-prod-x")
+    with pytest.raises(RuntimeError, match="env-var-backed"):
+        reset_item.reset_item("CHASE", confirm=True, api=MagicMock())
+
+
+def test_reset_errors_on_unknown_connection(db, monkeypatch):
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens", lambda: {})
+    with pytest.raises(RuntimeError, match="no token"):
+        reset_item.reset_item("NOPE", confirm=True, api=MagicMock())

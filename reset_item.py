@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 
 import storage
 import secure_tokens
+import plaid_client
+from plaid.exceptions import ApiException
+from plaid.model.item_remove_request import ItemRemoveRequest
 
 # Tables keyed by item_key. Ordered child-first (snapshots/investments before
 # accounts) for readable backups; the wipe also removes transaction_tags, which
@@ -96,3 +99,93 @@ def _backup(env_key: str, db_url: str | None, now) -> str:
     with open(path, "w") as fh:
         json.dump(data, fh, indent=2, default=str)
     return path
+
+
+def _is_item_not_found(exc: ApiException) -> bool:
+    try:
+        body = json.loads(getattr(exc, "body", "") or "{}")
+    except (ValueError, TypeError):
+        return False
+    return isinstance(body, dict) and body.get("error_code") == "ITEM_NOT_FOUND"
+
+
+def _institution(key: str, db_url: str | None) -> str | None:
+    conn = storage.open_readonly(db_url)
+    try:
+        row = conn.execute(
+            "SELECT institution FROM accounts WHERE item_key = %s LIMIT 1", (key,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def _wipe(key: str, db_url: str | None) -> dict:
+    conn = storage.open_db(db_url)
+    deleted: dict = {}
+    try:
+        with conn.transaction():
+            cur = conn.execute(
+                "DELETE FROM transaction_tags WHERE transaction_id IN "
+                "(SELECT transaction_id FROM transactions WHERE item_key = %s)",
+                (key,),
+            )
+            deleted["transaction_tags"] = cur.rowcount
+            for table in _ITEM_TABLES:
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE item_key = %s", (key,)
+                )
+                deleted[table] = cur.rowcount
+    finally:
+        conn.close()
+    return deleted
+
+
+def reset_item(env_key: str, *, confirm: bool = False, api=None,
+               db_url: str | None = None, tokens_url: str | None = None,
+               now=None) -> ResetResult:
+    from datetime import datetime
+
+    key = secure_tokens._norm(env_key)
+    db_url = db_url or storage.database_url()
+    tokens_url = tokens_url or secure_tokens._tokens_db_url() or db_url
+
+    if os.environ.get(f"PLAID_TOKEN_{key}"):
+        raise RuntimeError(
+            f"{key} token is env-var-backed; unset PLAID_TOKEN_{key} and retry"
+        )
+
+    token = plaid_client.load_tokens().get(key)
+    if token is None:
+        raise RuntimeError(
+            f"no token for {key}: unknown or already-cleared connection"
+        )
+
+    institution = _institution(key, db_url)
+    preview = preview_reset(key, db_url=db_url)
+
+    if not confirm:
+        return ResetResult(key, institution, deleted=preview, dry_run=True)
+
+    now = now or datetime.now()
+    backup_path = _backup(key, db_url, now)
+
+    api = api or plaid_client.build_api()
+    try:
+        api.item_remove(ItemRemoveRequest(access_token=token.reveal()))
+        plaid_removed = "removed"
+    except ApiException as exc:
+        if not _is_item_not_found(exc):
+            raise  # abort: local data + token untouched
+        plaid_removed = "already_absent"
+
+    deleted = _wipe(key, db_url)
+
+    cleared: list = []
+    for url in dict.fromkeys([tokens_url, db_url]):  # dedupe, keep order
+        if secure_tokens.remove_token(key, url=url):
+            cleared.append(url)
+
+    return ResetResult(key, institution, deleted=deleted,
+                       backup_path=backup_path, plaid_removed=plaid_removed,
+                       token_cleared=cleared)
