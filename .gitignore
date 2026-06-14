@@ -12,3 +12,6 @@ venv/
 .pytest_cache/
 .DS_Store
 .npm-cache/
+
+# Item-reset backups (contain financial data: balances, transactions)
+resets/

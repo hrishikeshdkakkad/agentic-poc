@@ -152,9 +152,9 @@ def set_token(env_key: str, token: str) -> None:
         conn.close()
 
 
-def remove_token(env_key: str) -> bool:
+def remove_token(env_key: str, url: str | None = None) -> bool:
     import storage
-    conn = storage.open_db(_tokens_db_url())
+    conn = storage.open_db(url or _tokens_db_url())
     try:
         cur = conn.execute(
             "DELETE FROM plaid_tokens WHERE env_key = %s", (_norm(env_key),)

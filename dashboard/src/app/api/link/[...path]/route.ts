@@ -7,6 +7,7 @@ const ROUTES: Record<string, { upstream: string; method: "GET" | "POST" }> = {
   exchange: { upstream: "exchange", method: "POST" },
   sync: { upstream: "sync", method: "POST" },
   "import-apple-card": { upstream: "import-apple-card", method: "POST" },
+  "reset-item": { upstream: "reset-item", method: "POST" },
 };
 
 type Ctx = { params: Promise<{ path: string[] }> };
