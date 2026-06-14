@@ -197,3 +197,17 @@ def test_reset_errors_on_unknown_connection(db, monkeypatch):
     monkeypatch.setattr(reset_item.plaid_client, "load_tokens", lambda: {})
     with pytest.raises(RuntimeError, match="no token"):
         reset_item.reset_item("NOPE", confirm=True, api=MagicMock())
+
+
+def test_reset_all_resets_every_connection(db, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seed_item(db, "CHASE")
+    _seed_item(db, "SOFI")
+    _store_token(db, "CHASE")
+    _store_token(db, "SOFI")
+    from plaid_client import SecretStr
+    monkeypatch.setattr(reset_item.plaid_client, "load_tokens",
+                        lambda: {"CHASE": SecretStr("a"), "SOFI": SecretStr("b")})
+    results = reset_item.reset_all(confirm=True, api=MagicMock())
+    assert {r.env_key for r in results} == {"CHASE", "SOFI"}
+    assert db.execute("SELECT count(*) FROM transactions").fetchone()[0] == 0

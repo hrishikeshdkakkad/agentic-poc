@@ -189,3 +189,15 @@ def reset_item(env_key: str, *, confirm: bool = False, api=None,
     return ResetResult(key, institution, deleted=deleted,
                        backup_path=backup_path, plaid_removed=plaid_removed,
                        token_cleared=cleared)
+
+
+def reset_all(*, confirm: bool = False, api=None, db_url: str | None = None,
+              tokens_url: str | None = None, now=None) -> list:
+    api = api or plaid_client.build_api()
+    results = []
+    for key in list(plaid_client.load_tokens().keys()):
+        results.append(
+            reset_item(key, confirm=confirm, api=api, db_url=db_url,
+                       tokens_url=tokens_url, now=now)
+        )
+    return results
