@@ -111,3 +111,28 @@ def test_reset_item_endpoint(fake_env_tokens, monkeypatch):
     assert body["ok"] is True
     assert body["env_key"] == "CHASE"
     assert body["plaid_removed"] == "removed"
+
+
+def test_exchange_mirrors_token_to_both_stores(fake_env_tokens, monkeypatch):
+    """A newly linked token is stored locally AND mirrored to the history DB,
+    so the Lambda syncs the new Item without a manual copy."""
+    link_helper = _reload_link_helper_with_mock_api()
+    api = link_helper.api
+    api.item_public_token_exchange.return_value.to_dict.return_value = {
+        "access_token": "access-prod-new", "item_id": "item-xyz"}
+    api.item_get.return_value.to_dict.return_value = {"item": {"institution_id": "ins_3"}}
+    api.institutions_get_by_id.return_value.to_dict.return_value = {"institution": {"name": "Chase"}}
+
+    captured = {}
+    import secure_tokens
+    monkeypatch.setattr(
+        secure_tokens, "set_token_everywhere",
+        lambda key, tok: captured.update(key=key, tok=tok) or {"local": True, "history_db": True},
+    )
+    client = TestClient(link_helper.app)
+    resp = client.post("/exchange", json={"public_token": "public-x"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert captured["key"] == "PLAID_TOKEN_CHASE"   # env_key derived from institution
+    assert captured["tok"] == "access-prod-new"     # the freshly exchanged token
+    assert body["token_stores"]["history_db"] is True

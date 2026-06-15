@@ -141,15 +141,47 @@ def load_encrypted_tokens() -> dict[str, str]:
     return {k: _decrypt(f, ct, k) for k, ct in rows}
 
 
-def set_token(env_key: str, token: str) -> None:
+def set_token(env_key: str, token: str, url: str | None = None) -> None:
     """Add or replace one token. env_key is the bare suffix, e.g. 'CHASE'."""
     import storage
     f = _get_fernet()
-    conn = storage.open_db(_tokens_db_url())
+    conn = storage.open_db(url or _tokens_db_url())
     try:
         _upsert(conn, _norm(env_key), f.encrypt(token.encode()).decode())
     finally:
         conn.close()
+
+
+def set_token_everywhere(env_key: str, token: str) -> dict:
+    """Store the token in the local token store AND mirror it into the history
+    DB (Neon) so the scheduled Lambda -- which reads plaid_tokens from
+    DATABASE_URL, not the local token store -- syncs a newly linked Item
+    automatically, with no manual local->Neon copy.
+
+    SECURITY NOTE: this deliberately copies the (Fernet-encrypted) access token
+    into the cloud history DB, relaxing the "tokens never leave the machine"
+    posture in exchange for hands-off Lambda sync. Set PFM_DISABLE_TOKEN_MIRROR=1
+    to keep new tokens local-only (then copy to Neon manually to enable sync).
+
+    The mirror is best-effort: the local write is authoritative and happens
+    first, so a failure to reach Neon never loses the token or fails the link.
+    Returns {"local": True, "history_db": True | "disabled" | "error: ..."}.
+    When the token store and history DB are the same database, writes once.
+    """
+    db = os.environ.get("DATABASE_URL")
+    local = _tokens_db_url() or db
+    results: dict = {}
+    set_token(env_key, token, url=local)   # authoritative local write
+    results["local"] = True
+    if os.environ.get("PFM_DISABLE_TOKEN_MIRROR"):
+        results["history_db"] = "disabled"
+    elif db and db != local:
+        try:
+            set_token(env_key, token, url=db)
+            results["history_db"] = True
+        except Exception as e:  # noqa: BLE001 - mirror is best-effort, never fatal
+            results["history_db"] = f"error: {type(e).__name__}: {e}"
+    return results
 
 
 def remove_token(env_key: str, url: str | None = None) -> bool:
