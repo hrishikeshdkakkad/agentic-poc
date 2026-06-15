@@ -295,17 +295,28 @@ def exchange(req: ExchangeReq) -> dict:
     env_suffix = "".join(ch for ch in ins_name.upper() if ch.isalnum())
     env_key = f"PLAID_TOKEN_{env_suffix}" if env_suffix else "PLAID_TOKEN_UNKNOWN"
 
-    # Store encrypted at rest; the raw token is never printed or logged.
+    # Store encrypted at rest (raw token never printed/logged) AND mirror into
+    # the history DB so the scheduled Lambda syncs this Item with no manual copy.
     import secure_tokens
-    secure_tokens.set_token(env_key, access_token)
+    stores = secure_tokens.set_token_everywhere(env_key, access_token)
 
+    mirror = stores.get("history_db")
+    if mirror is True:
+        where = "local store + Neon (Lambda will sync it)"
+    elif mirror == "disabled":
+        where = "local store only (PFM_DISABLE_TOKEN_MIRROR set)"
+    elif mirror is None:
+        where = "token store (single DB)"
+    else:
+        where = f"local store; Neon mirror FAILED ({mirror}) — copy manually"
     print("=" * 60, flush=True)
     print(f"Institution: {ins_name}", flush=True)
     print(f"Item ID:     {item_id}", flush=True)
-    print(f"Token encrypted and stored in plaid_tokens as {env_key}", flush=True)
+    print(f"Token encrypted and stored in plaid_tokens as {env_key} -> {where}", flush=True)
     print("=" * 60, flush=True)
 
-    return {"institution": ins_name, "item_id": item_id, "env_key": env_key, "stored": "encrypted"}
+    return {"institution": ins_name, "item_id": item_id, "env_key": env_key,
+            "stored": "encrypted", "token_stores": stores}
 
 
 class ResetReq(BaseModel):
