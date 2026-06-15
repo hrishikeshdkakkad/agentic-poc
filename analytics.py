@@ -74,21 +74,31 @@ def compose_net_worth(shaped_accounts: list[dict]) -> dict:
 
 
 def net_worth_history(db_url: str | None = None) -> dict:
-    """Net worth per snapshot date, from balance_snapshots only."""
+    """Net worth per snapshot date, from balance_snapshots only.
+
+    Uses the SAME asset/liability partition as the live compose_net_worth so
+    the historical series and get_net_worth agree by construction: a type is a
+    liability iff it is in LIABILITY_TYPES (credit/loan); everything else —
+    including 'other'/unknown types and NULL type — counts as an asset, exactly
+    as classify_account folds those into the asset classes. Previously this
+    hardcoded a narrower asset set ('depository','investment','brokerage'),
+    silently dropping 'other'-type accounts that the live tool still counted.
+    """
     conn = storage.open_readonly(db_url)
     try:
+        # `type IN ('credit','loan')` is the liability test; its complement
+        # (false OR unknown-for-NULL-type) is the asset side, matching
+        # compose_net_worth's assets = cash+investments+retirement+other.
         rows = conn.execute(
             """
             SELECT
                 snapshot_date,
-                round(sum(CASE WHEN type IN ('depository','investment','brokerage')
-                               THEN current ELSE 0 END)::numeric, 2) AS assets,
+                round(sum(CASE WHEN type IN ('credit','loan')
+                               THEN 0 ELSE current END)::numeric, 2) AS assets,
                 round(sum(CASE WHEN type IN ('credit','loan')
                                THEN current ELSE 0 END)::numeric, 2) AS liabilities,
-                round((sum(CASE WHEN type IN ('depository','investment','brokerage')
-                               THEN current ELSE 0 END)
-                     - sum(CASE WHEN type IN ('credit','loan')
-                               THEN current ELSE 0 END))::numeric, 2) AS net_worth
+                round(sum(CASE WHEN type IN ('credit','loan')
+                               THEN -current ELSE current END)::numeric, 2) AS net_worth
             FROM balance_snapshots
             GROUP BY snapshot_date
             ORDER BY snapshot_date

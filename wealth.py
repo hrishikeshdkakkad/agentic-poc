@@ -101,6 +101,19 @@ def payoff_schedule(balance: float, rate_pct: float, monthly_payment: float) -> 
         total_interest += interest
         bal = bal + interest - monthly_payment
         months += 1
+    if bal > 0:
+        # Payment exceeds interest (so it would pay off eventually) but not
+        # within the cap — don't report a false "debt-free in N months" with a
+        # nonzero balance still outstanding.
+        years = PAYOFF_MAX_MONTHS // 12
+        return {
+            "monthly_payment": monthly_payment,
+            "months": None,
+            "total_interest": None,
+            "verdict": f"${monthly_payment:,.0f}/mo barely beats the "
+                       f"~${balance * r:,.0f}/mo interest — not paid off "
+                       f"within {years} years",
+        }
     return {
         "monthly_payment": monthly_payment,
         "months": months,

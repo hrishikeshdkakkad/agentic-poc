@@ -51,6 +51,34 @@ def _holding(conn, sd, symbol, sec_type, qty, price, mv, basis,
 
 
 # ---------------------------------------------------------------------------
+# payoff_schedule
+# ---------------------------------------------------------------------------
+
+def test_payoff_schedule_never_when_payment_below_interest():
+    # $50/mo on $10k at 24% APR — interest is $200/mo, payment never wins.
+    out = wealth.payoff_schedule(10000.0, 24.0, 50.0)
+    assert out["months"] is None and out["total_interest"] is None
+    assert "never" in out["verdict"]
+
+
+def test_payoff_schedule_caps_without_false_payoff():
+    # Payment beats interest by a hair, so it would pay off *eventually* but far
+    # beyond the month cap. It must report None, never a "debt-free in N months"
+    # verdict while a balance is still outstanding at the cap.
+    monthly_interest = 10000.0 * 0.20 / 12  # ~166.67
+    out = wealth.payoff_schedule(10000.0, 20.0, monthly_interest + 0.005)
+    assert out["months"] is None and out["total_interest"] is None
+    assert "not paid off" in out["verdict"]
+
+
+def test_payoff_schedule_normal_case_pays_off():
+    out = wealth.payoff_schedule(5856.91, 26.74, 500.0)
+    assert 12 <= out["months"] <= 16
+    assert out["total_interest"] > 500
+    assert "debt-free" in out["verdict"]
+
+
+# ---------------------------------------------------------------------------
 # get_debt_analysis
 # ---------------------------------------------------------------------------
 

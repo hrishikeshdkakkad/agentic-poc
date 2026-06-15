@@ -86,6 +86,36 @@ def test_net_worth_history_from_snapshots(seeded_db):
                      "liabilities": 400.0, "net_worth": 600.0}
 
 
+def test_net_worth_history_and_compose_agree_on_other_type(db):
+    """net_worth_history must use the same asset/liability partition as the
+    live compose_net_worth: an 'other'/unknown-type account counts as an asset
+    in BOTH, so the historical series can't silently disagree with get_net_worth.
+    """
+    conn = db
+    rows = [
+        ("a_dep", "depository", "checking", 1000.0),
+        ("a_other", "other", "other", 5000.0),   # Plaid 'other' enum value
+        ("a_cc", "credit", "credit card", 400.0),
+    ]
+    for aid, typ, sub, cur in rows:
+        conn.execute(
+            "INSERT INTO balance_snapshots VALUES "
+            "(%s, now(), %s, 'IT1', 'BankX', %s, %s, %s, NULL, NULL, 'USD')",
+            ("2026-06-15", aid, typ, sub, cur),
+        )
+    hist = analytics.net_worth_history()["history"][-1]
+    live = analytics.compose_net_worth([
+        {"type": t, "subtype": s, "balance": {"current": c},
+         "handle": a, "name": a, "institution": "BankX"}
+        for a, t, s, c in rows
+    ])
+    # other (5000) + depository (1000) are assets; credit (400) is a liability.
+    assert hist["assets"] == 6000.0
+    assert hist["liabilities"] == 400.0
+    assert hist["net_worth"] == 5600.0
+    assert hist["net_worth"] == live["net_worth"]
+
+
 def test_query_finances_select_works_and_writes_rejected(seeded_db):
     out = analytics.query_finances("SELECT count(*) AS n FROM transactions")
     assert out["rows"][0][0] == 8
