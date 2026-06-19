@@ -1,3 +1,5 @@
+import { callerRoles, unauthorized, denyPerm } from "@/lib/session";
+
 const LINK_HELPER_URL = process.env.LINK_HELPER_URL ?? "http://localhost:8765";
 
 // dashboard path → { upstream path, allowed method }
@@ -13,6 +15,10 @@ const ROUTES: Record<string, { upstream: string; method: "GET" | "POST" }> = {
 type Ctx = { params: Promise<{ path: string[] }> };
 
 async function proxy(req: Request, ctx: Ctx, method: "GET" | "POST") {
+  const roles = await callerRoles();
+  if (roles === null) return unauthorized();
+  const denied = denyPerm(roles, "connections:manage");
+  if (denied) return denied;
   const { path } = await ctx.params;
   const route = ROUTES[path.join("/")];
   if (!route) return Response.json({ error: "unknown link_helper path" }, { status: 404 });
