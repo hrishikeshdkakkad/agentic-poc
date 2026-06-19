@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/mcp", () => ({ callMcpTool: vi.fn() }));
+// Auth is loaded lazily by callerRoles(); mock it so unit tests run without next-auth.
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
 
 import { callMcpTool } from "@/lib/mcp";
+import { auth } from "@/auth";
 import { POST } from "./[tool]/route";
+
+const asRoles = (roles: string[] | null) =>
+  vi.mocked(auth).mockResolvedValue((roles === null ? null : { user: { roles } }) as never);
 
 const post = (tool: string, body?: unknown) =>
   POST(
@@ -14,7 +20,10 @@ const post = (tool: string, body?: unknown) =>
     { params: Promise.resolve({ tool }) },
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  asRoles(["admin"]); // default caller is admin unless a test overrides
+});
 
 describe("POST /api/mcp/[tool]", () => {
   it("rejects unknown tools", async () => {
@@ -42,5 +51,27 @@ describe("POST /api/mcp/[tool]", () => {
     const res = await post("get_net_worth", {});
     expect(res.status).toBe(502);
     expect(await res.json()).toMatchObject({ service: "mcp" });
+  });
+
+  // --- RBAC ---
+  it("401s when there is no session", async () => {
+    asRoles(null);
+    const res = await post("get_net_worth", {});
+    expect(res.status).toBe(401);
+    expect(callMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("403s when the role lacks the tool (viewer → portfolio)", async () => {
+    asRoles(["realestate-viewer"]);
+    const res = await post("get_portfolio_analysis", {});
+    expect(res.status).toBe(403);
+    expect(callMcpTool).not.toHaveBeenCalled();
+  });
+
+  it("403s a viewer trying raw SQL (query_finances is admin-only)", async () => {
+    asRoles(["realestate-viewer"]);
+    const res = await post("query_finances", { args: { sql: "SELECT 1" } });
+    expect(res.status).toBe(403);
+    expect(callMcpTool).not.toHaveBeenCalled();
   });
 });

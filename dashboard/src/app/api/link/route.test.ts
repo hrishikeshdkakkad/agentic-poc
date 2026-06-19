@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
+
+import { auth } from "@/auth";
 import { GET, POST } from "./[...path]/route";
 
 const ctx = (...path: string[]) => ({ params: Promise.resolve({ path }) });
+const asRoles = (roles: string[] | null) =>
+  vi.mocked(auth).mockResolvedValue((roles === null ? null : { user: { roles } }) as never);
 
+beforeEach(() => asRoles(["admin"])); // link_helper proxy is admin-only
 afterEach(() => vi.unstubAllGlobals());
 
 describe("/api/link proxy", () => {
@@ -43,5 +50,11 @@ describe("/api/link proxy", () => {
       ctx("reset-item"),
     );
     expect(res.status).not.toBe(404);
+  });
+
+  it("403s a non-admin (connections:manage required)", async () => {
+    asRoles(["realestate-viewer"]);
+    const res = await GET(new Request("http://x/api/link/status"), ctx("status"));
+    expect(res.status).toBe(403);
   });
 });
