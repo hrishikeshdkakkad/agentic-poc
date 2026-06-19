@@ -13,8 +13,10 @@ ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 DOMAIN_PREFIX="${COGNITO_DOMAIN_PREFIX:-pf-mcp-${ACCOUNT_ID}}"
 
 cb() { printf '%s/api/auth/callback/cognito' "$1"; }
-CALLBACKS="$(cb "$CALLBACK_BASE"),$(cb "$DEV_CALLBACK_BASE")"
-LOGOUTS="${CALLBACK_BASE}/login,${DEV_CALLBACK_BASE}/login"
+# AWS CLI list params are SPACE-separated; keep these as separate array elements
+# (a comma-joined string becomes one malformed callback → OAuth redirect_mismatch).
+CB_PROD="$(cb "$CALLBACK_BASE")"; CB_DEV="$(cb "$DEV_CALLBACK_BASE")"
+LOGOUT_PROD="${CALLBACK_BASE}/login"; LOGOUT_DEV="${DEV_CALLBACK_BASE}/login"
 
 echo "Region=$REGION Account=$ACCOUNT_ID Domain=$DOMAIN_PREFIX" >&2
 
@@ -55,7 +57,7 @@ COMMON_CLIENT_ARGS=(--region "$REGION" --user-pool-id "$POOL_ID"
   --allowed-o-auth-flows code --allowed-o-auth-scopes openid email profile
   --allowed-o-auth-flows-user-pool-client
   --supported-identity-providers COGNITO
-  --callback-urls "$CALLBACKS" --logout-urls "$LOGOUTS"
+  --callback-urls "$CB_PROD" "$CB_DEV" --logout-urls "$LOGOUT_PROD" "$LOGOUT_DEV"
   --explicit-auth-flows ALLOW_REFRESH_TOKEN_AUTH ALLOW_USER_SRP_AUTH
   --prevent-user-existence-errors ENABLED
   --enable-token-revocation
