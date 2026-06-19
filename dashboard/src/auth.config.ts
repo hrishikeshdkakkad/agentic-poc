@@ -7,6 +7,8 @@ import Cognito from "next-auth/providers/cognito";
 export const authConfig: NextAuthConfig = {
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  // Behind Vercel's proxy; trust the forwarded host for OAuth callback URLs.
+  trustHost: true,
   providers: [
     Cognito({
       clientId: process.env.AUTH_COGNITO_ID,
