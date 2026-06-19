@@ -5,7 +5,7 @@ import { useRef, useState } from "react";
 import { useLinkStatus, useTool } from "@/lib/hooks";
 import { callTool, linkFetch } from "@/lib/api";
 import { fmtDateTime, usd } from "@/lib/format";
-import { Badge, Button, Card, ErrorBanner, inputCls, Loading, Spinner, StatusBadge } from "@/components/ui";
+import { Button, Card, ErrorBanner, inputCls, Loading, Spinner, StatusBadge } from "@/components/ui";
 import { IconPlus, IconSync, IconUpload, IconWallet } from "@/components/icons";
 
 declare global {
@@ -16,6 +16,7 @@ declare global {
   }
 }
 
+// link_helper /status shape (local-only service; holds Plaid tokens).
 type LinkStatus = {
   institutions: Array<{
     env_key: string;
@@ -29,13 +30,40 @@ type LinkStatus = {
   last_sync?: { at: string; ok: boolean; warnings?: unknown[]; error?: string } | null;
 };
 
+// MCP-backed shapes (work in the cloud and locally).
+type InstStatus = { items: Array<{ env_key: string; institution: string; status: string; reason: string | null }> };
+type SyncStatus = { items: Array<{ item_key: string; last_synced_at: string | null }> };
+
 function Output({ text }: { text: string }) {
   if (!text) return null;
   return <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-[var(--radius-sm)] border border-line bg-surface p-3 text-xs text-mut">{text}</pre>;
 }
 
+/** Shown for token-touching actions (link / reset / CSV) when link_helper isn't
+ * reachable — i.e. on the deployed app. Those run locally by design so Plaid
+ * access tokens never leave your machine. */
+function LocalOnlyNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-dashed border-line bg-surface px-4 py-3 text-[13px] text-mut">
+      {children}
+      <div className="mt-2 text-xs text-faint">
+        Run the local dashboard: <code>cd dashboard &amp;&amp; npm run dev</code> with{" "}
+        <code>.venv/bin/uvicorn link_helper:app --port 8765</code> (tokens stay on your machine).
+      </div>
+    </div>
+  );
+}
+
 export default function Connections() {
-  const status = useLinkStatus<LinkStatus>();
+  // link_helper is local-only; in the cloud this errors → we fall back to MCP.
+  const local = useLinkStatus<LinkStatus>();
+  const linkUp = !!local.data && !local.error;
+
+  // MCP-backed status (deployed + local): live institution health + last-synced.
+  const insts = useTool<InstStatus>("get_institutions_status");
+  const sync = useTool<SyncStatus>("get_sync_status");
+  const lastSync = sync.data?.items?.map((i) => i.last_synced_at).filter(Boolean).sort().pop() ?? null;
+
   const [syncOut, setSyncOut] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [linkOut, setLinkOut] = useState("");
@@ -44,20 +72,29 @@ export default function Connections() {
   const [csvName, setCsvName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
+  function refreshAll() {
+    insts.mutate();
+    sync.mutate();
+    local.mutate();
+  }
+
+  // Sync via the MCP server (same run_sync code path) so it works in the cloud too.
   async function syncNow() {
     setSyncing(true);
     setSyncOut("Running sync…");
     try {
-      const d = await linkFetch<{ ok: boolean; total_transactions_stored?: number }>("sync", { method: "POST" });
-      setSyncOut((d.ok ? `✓ Sync OK — ${d.total_transactions_stored} transactions stored` : "⚠ Sync completed with issues") + "\n" + JSON.stringify(d, null, 2));
+      const d = await callTool<{ total_transactions_stored?: number; warnings?: unknown[] }>("sync_now");
+      const ok = !(d.warnings && d.warnings.length);
+      setSyncOut((ok ? `✓ Sync OK — ${d.total_transactions_stored ?? 0} transactions stored` : "⚠ Sync completed with issues") + "\n" + JSON.stringify(d, null, 2));
     } catch (e) {
       setSyncOut(`Sync failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setSyncing(false);
-      status.mutate();
+      refreshAll();
     }
   }
 
+  // ── link_helper actions (local only) ───────────────────────────────────────
   async function resetItem(envKey: string, name: string) {
     if (!window.confirm(
       `Reset ${name}? This removes the Plaid Item (stops billing) and wipes its ` +
@@ -65,21 +102,17 @@ export default function Connections() {
       `pull 24 months.`)) return;
     setResetting(envKey);
     try {
-      // The endpoint returns HTTP 200 with {ok:false} on a Plaid/DB error
-      // (warnings-not-exceptions convention), so guard on `ok` before
-      // re-linking — otherwise a failed reset would leave the old Item alive
-      // while we create a new one, and the Lambda would sync both (double-count).
       const d = await linkFetch<{ ok: boolean; error?: string }>(`reset-item`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ env_key: envKey }),
       });
-      status.mutate();
+      refreshAll();
       if (!d.ok) {
         setLinkOut(`Reset failed for ${name}: ${d.error ?? "unknown error"}`);
         return;
       }
-      await linkBank(); // chain straight into the fresh link flow
+      await linkBank();
     } finally {
       setResetting(null);
     }
@@ -98,7 +131,7 @@ export default function Connections() {
         onSuccess: async (public_token) => {
           const ex = await linkFetch<unknown>("exchange", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ public_token }) });
           setLinkOut("Linked! " + JSON.stringify(ex));
-          status.mutate();
+          refreshAll();
         },
         onExit: (err) => {
           if (err) setLinkOut("Exit: " + JSON.stringify(err));
@@ -131,23 +164,22 @@ export default function Connections() {
     } catch (e) {
       setCsvOut(`Upload failed: ${e instanceof Error ? e.message : e}`);
     } finally {
-      status.mutate();
+      refreshAll();
     }
   }
-
-  const ls = status.data?.last_sync;
 
   return (
     <div className="space-y-4">
       <Script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js" strategy="afterInteractive" />
-      <ErrorBanner error={status.error} />
+      {/* Only surface MCP errors here — a link_helper error in the cloud is expected. */}
+      <ErrorBanner error={insts.error} />
 
       <Card
         title="Linked banks"
         icon={<IconSync size={16} />}
         right={
           <div className="flex gap-2">
-            <Button variant="secondary" size="sm" onClick={() => status.mutate()}>
+            <Button variant="secondary" size="sm" onClick={refreshAll}>
               Refresh
             </Button>
             <Button variant="primary" size="sm" onClick={syncNow} disabled={syncing} icon={syncing ? <Spinner size={14} /> : <IconSync size={14} />}>
@@ -157,8 +189,13 @@ export default function Connections() {
         }
         noPad
       >
-        {status.data ? (
-          status.data.institutions.length ? (
+        <div className="border-b border-line px-5 py-2 text-xs text-mut">
+          Last synced <span className="text-txt">{lastSync ? fmtDateTime(lastSync) : "—"}</span> · auto-syncs ~6×/day
+        </div>
+
+        {linkUp ? (
+          /* LOCAL: full link_helper table with per-bank accounts + reset/re-link. */
+          local.data!.institutions.length ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -171,7 +208,7 @@ export default function Connections() {
                   </tr>
                 </thead>
                 <tbody>
-                  {status.data.institutions.map((i) => (
+                  {local.data!.institutions.map((i) => (
                     <tr key={i.env_key} className="border-b border-line align-top last:border-0">
                       <td className="px-5 py-3 font-semibold text-txt">{i.institution}</td>
                       <td className="px-5 py-3">
@@ -184,12 +221,7 @@ export default function Connections() {
                       <td className="px-5 py-3 text-mut">{fmtDateTime(i.last_synced_at)}</td>
                       <td className="px-5 py-3">
                         {i.status !== "csv_import" && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => resetItem(i.env_key, i.institution)}
-                            disabled={resetting === i.env_key}
-                          >
+                          <Button variant="secondary" size="sm" onClick={() => resetItem(i.env_key, i.institution)} disabled={resetting === i.env_key}>
                             {resetting === i.env_key ? "Resetting…" : "Reset & re-link"}
                           </Button>
                         )}
@@ -202,43 +234,81 @@ export default function Connections() {
           ) : (
             <div className="px-5 py-6 text-mut">No banks linked yet — click “Link a bank”.</div>
           )
-        ) : status.error ? null : (
+        ) : insts.data ? (
+          /* CLOUD: read-only institution health from the MCP server. */
+          insts.data.items.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-mut">
+                    <th className="px-5 py-2.5 font-semibold">Bank</th>
+                    <th className="px-5 py-2.5 font-semibold">Status</th>
+                    <th className="px-5 py-2.5 font-semibold">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {insts.data.items.map((i) => (
+                    <tr key={i.env_key} className="border-b border-line align-top last:border-0">
+                      <td className="px-5 py-3 font-semibold text-txt">{i.institution}</td>
+                      <td className="px-5 py-3"><StatusBadge status={i.status} /></td>
+                      <td className="px-5 py-3 text-mut">{i.reason ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-5 py-6 text-mut">No banks linked yet — link one from your local dashboard.</div>
+          )
+        ) : (
           <Loading />
         )}
-        {(syncOut || ls?.error) && (
+        {syncOut && (
           <div className="px-5 pb-4">
-            <Output text={syncOut || `Last sync error: ${ls?.error}`} />
+            <Output text={syncOut} />
           </div>
         )}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Link a new bank" icon={<IconPlus size={16} />}>
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm text-mut">Connect another institution through Plaid.</p>
-            <Button variant="primary" onClick={linkBank} icon={<IconPlus size={15} />}>
-              Link a bank
-            </Button>
-          </div>
-          <p className="mt-3 text-xs text-faint">
-            Re-auth for a broken link: use the curl flow in <code>link_helper.py</code> — tokens never reach the browser.
-          </p>
-          <Output text={linkOut} />
+          {linkUp ? (
+            <>
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm text-mut">Connect another institution through Plaid.</p>
+                <Button variant="primary" onClick={linkBank} icon={<IconPlus size={15} />}>
+                  Link a bank
+                </Button>
+              </div>
+              <p className="mt-3 text-xs text-faint">
+                Re-auth for a broken link: use the curl flow in <code>link_helper.py</code> — tokens never reach the browser.
+              </p>
+              <Output text={linkOut} />
+            </>
+          ) : (
+            <LocalOnlyNote>Linking a bank goes through Plaid and stores an access token, so it runs from your local dashboard — not the cloud.</LocalOnlyNote>
+          )}
         </Card>
 
         <Card title="Import Apple Card" icon={<IconUpload size={16} />}>
-          <p className="text-sm text-mut">Upload an Apple Card CSV export. Overlapping statements only add dates you don&apos;t already have.</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <input type="file" ref={fileRef} accept=".csv,text/csv" className="hidden" onChange={() => setCsvName(fileRef.current?.files?.[0]?.name ?? "")} />
-            <Button variant="secondary" onClick={() => fileRef.current?.click()}>
-              Choose CSV…
-            </Button>
-            <Button variant="primary" onClick={uploadCsv} disabled={!csvName} icon={<IconUpload size={15} />}>
-              Upload
-            </Button>
-            <span className="text-xs text-faint">{csvName || "No file chosen"}</span>
-          </div>
-          <Output text={csvOut} />
+          {linkUp ? (
+            <>
+              <p className="text-sm text-mut">Upload an Apple Card CSV export. Overlapping statements only add dates you don&apos;t already have.</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input type="file" ref={fileRef} accept=".csv,text/csv" className="hidden" onChange={() => setCsvName(fileRef.current?.files?.[0]?.name ?? "")} />
+                <Button variant="secondary" onClick={() => fileRef.current?.click()}>
+                  Choose CSV…
+                </Button>
+                <Button variant="primary" onClick={uploadCsv} disabled={!csvName} icon={<IconUpload size={15} />}>
+                  Upload
+                </Button>
+                <span className="text-xs text-faint">{csvName || "No file chosen"}</span>
+              </div>
+              <Output text={csvOut} />
+            </>
+          ) : (
+            <LocalOnlyNote>CSV import writes to your history store through the local helper, so it runs from your local dashboard.</LocalOnlyNote>
+          )}
         </Card>
       </div>
 
