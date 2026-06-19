@@ -2,6 +2,10 @@ import { callMcpTool } from "@/lib/mcp";
 import { ALLOWED_TOOLS } from "@/lib/tools";
 import { callerRoles, unauthorized, denyTool } from "@/lib/session";
 
+// Some MCP tools (e.g. get_net_worth recomposing live Plaid balances) run ~36s.
+// Vercel Hobby allows up to 60s; raise from the 10s default so they don't time out.
+export const maxDuration = 60;
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ tool: string }> },
