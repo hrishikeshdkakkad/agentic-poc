@@ -17,14 +17,15 @@ export default auth((req) => {
     return;
   }
 
+  // API routes self-enforce (layer 2): they return JSON 401/403 themselves.
+  // Pass them through so we never redirect an API call to the HTML login page.
+  if (pathname.startsWith("/api")) return;
+
   if (!req.auth) {
     const url = new URL("/login", req.nextUrl.origin);
     url.searchParams.set("callbackUrl", req.nextUrl.pathname);
     return NextResponse.redirect(url);
   }
-
-  // API routes enforce their own tool/route permission (layer 2).
-  if (pathname.startsWith("/api")) return;
 
   const perms = permissionsForRoles(req.auth.user?.roles ?? []);
   if (!canAccessPage(perms, pathname)) {
