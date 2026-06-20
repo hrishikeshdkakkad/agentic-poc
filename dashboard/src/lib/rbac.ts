@@ -12,7 +12,10 @@ const WILDCARD = "*";
 
 export const ROLE_PERMISSIONS: Record<string, (Permission | "*")[]> = {
   admin: [WILDCARD],
-  "realestate-viewer": ["realestate:read"],
+  // /real-estate is a shared read-write workspace for viewers: they can read the
+  // deal AND save edits/actuals, but page access (PAGE_PERMISSION keyed on
+  // realestate:read) still confines them to /real-estate and no other scope.
+  "realestate-viewer": ["realestate:read", "realestate:write"],
 };
 
 export const PAGE_PERMISSION: Record<string, Permission> = {

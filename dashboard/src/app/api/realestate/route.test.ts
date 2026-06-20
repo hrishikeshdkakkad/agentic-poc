@@ -65,13 +65,24 @@ describe("PUT /api/realestate/deals/[id]", () => {
     expect(vi.mocked(upsertDeal)).toHaveBeenCalledOnce();
   });
 
-  it("403s a realestate-viewer writing a deal (needs realestate:write)", async () => {
+  it("allows a realestate-viewer to write a deal (shared workspace: realestate:write granted)", async () => {
     asRoles(["realestate-viewer"]);
+    vi.mocked(upsertDeal).mockImplementation(async (d) => d);
     const res = await PUT(
       new Request("http://x/api/realestate/deals/pid", { method: "PUT", body: JSON.stringify({ inputs: DEFAULTS }) }),
       idCtx("pid"),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(upsertDeal).toHaveBeenCalledOnce();
+  });
+
+  it("still 401s an unauthenticated writer", async () => {
+    asRoles(null);
+    const res = await PUT(
+      new Request("http://x/api/realestate/deals/pid", { method: "PUT", body: JSON.stringify({ inputs: DEFAULTS }) }),
+      idCtx("pid"),
+    );
+    expect(res.status).toBe(401);
     expect(upsertDeal).not.toHaveBeenCalled();
   });
 

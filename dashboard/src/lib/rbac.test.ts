@@ -24,6 +24,16 @@ describe("rbac", () => {
     expect(allowedPages(viewer)).toEqual(["/real-estate"]);
   });
 
+  it("realestate-viewer can read AND write the deal (shared workspace), nothing else", () => {
+    expect(can(viewer, "realestate:read")).toBe(true);
+    expect(can(viewer, "realestate:write")).toBe(true);
+    // write does not widen page access or leak other scopes
+    expect(allowedPages(viewer)).toEqual(["/real-estate"]);
+    expect(can(viewer, "networth:read")).toBe(false);
+    expect(can(viewer, "transactions:read")).toBe(false);
+    expect(can(viewer, "connections:manage")).toBe(false);
+  });
+
   it("viewer cannot reach the real-estate context strip's tools", () => {
     expect(canUseTool(viewer, "get_net_worth_history")).toBe(false);
     expect(canUseTool(viewer, "get_portfolio_analysis")).toBe(false);
