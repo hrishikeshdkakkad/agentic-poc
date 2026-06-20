@@ -3,6 +3,26 @@
 Next.js drill-down UI over the personal-finance MCP server and `link_helper`.
 Never deploy this — it assumes a trusted localhost, like `link_helper` itself.
 
+## Interface
+
+- **Design system** — token-driven dark/light theming. Raw CSS variables live in
+  `:root` / `[data-theme="light"]` (`globals.css`) and are mapped to Tailwind v4 via
+  `@theme inline`, so utilities like `bg-card` re-theme at runtime with zero markup
+  changes. A pre-paint `<head>` script (`components/theme.tsx`) sets the theme before
+  first paint to avoid flashes. Geist Sans/Mono; tabular figures everywhere money lives.
+- **App shell** (`components/app-shell.tsx`) — grouped nav rail (source of truth:
+  `components/nav.tsx`), sticky top bar, global Sync with SWR revalidation, and a
+  **⌘K command palette** (`components/command-palette.tsx`) to jump pages / sync / toggle theme.
+- **Data grids** — data-heavy pages use **ag-grid** through one themed wrapper
+  (`components/data-grid.tsx`): sort / filter / column resize / quick-search / CSV export,
+  plus finance cell renderers (money with cash-flow sign, gains, chips, tags, share bars).
+  The grid's `data-ag-theme-mode` follows the app theme attribute, so it re-themes in lockstep.
+- **Charts** (`components/charts.tsx`) — recharts styled entirely through CSS variables
+  (so they follow the theme), with gradient fills and a custom tooltip. Entry animations are
+  disabled for instant, reliable rendering.
+- **Primitives** (`components/ui.tsx`) — Card, KpiCard, Drawer, Button, Segmented, Badge,
+  skeleton loaders, empty states. UI/UX only — no tool calls or data shapes changed.
+
 ## Run
 
 Requires both backends:

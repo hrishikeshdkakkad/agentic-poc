@@ -1,19 +1,272 @@
 @import "tailwindcss";
 
-@theme {
-  --color-bg: #0f1115;
-  --color-card: #181b21;
-  --color-line: #262b33;
-  --color-txt: #e6e9ef;
-  --color-mut: #9aa3b2;
-  --color-green: #2ecc71;
-  --color-red: #ff5b5b;
-  --color-amber: #f5a623;
-  --color-accent: #4c8bf5;
+/* ───────────────────────────────────────────────────────────────────────────
+   "Vault" — design tokens for a precise, institutional-grade finance dashboard.
+
+   Strategy: raw runtime CSS variables live in :root (dark, default) and
+   [data-theme="light"]. Tailwind tokens are mapped with `@theme inline` so a
+   utility like `bg-card` compiles to `background: var(--card)` — meaning every
+   existing class in the app re-themes at runtime with zero markup changes.
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces — a real elevation ladder, not one flat grey */
+  --bg: #0a0c10;
+  --bg-glow: #11151d;
+  --surface: #0f1218;
+  --card: #14181f;
+  --elevated: #1a1f28;
+  --hover: #1d2330;
+
+  /* Lines */
+  --line: #232834;
+  --line-strong: #2f3645;
+
+  /* Text */
+  --txt: #eceff5;
+  --mut: #8b93a5;
+  --faint: #5c6577;
+
+  /* Semantic — tuned for a near-black backdrop */
+  --green: #34d39a;
+  --green-soft: #34d39a26;
+  --red: #fb6f6f;
+  --red-soft: #fb6f6f26;
+  --amber: #f5b13d;
+  --amber-soft: #f5b13d26;
+  --accent: #7b8cff;
+  --accent-soft: #7b8cff26;
+  --accent-contrast: #ffffff;
+
+  /* Categorical palette for charts (distinct, cohesive on dark) */
+  --c1: #7b8cff;
+  --c2: #34d39a;
+  --c3: #f5b13d;
+  --c4: #fb6f6f;
+  --c5: #a78bfa;
+  --c6: #38bdf8;
+  --c7: #f472b6;
+  --c8: #5eead4;
+  --c9: #fbbf24;
+  --c10: #94a3b8;
+
+  /* Shape */
+  --radius-sm: 7px;
+  --radius: 11px;
+  --radius-lg: 15px;
+  --radius-xl: 20px;
+
+  /* Elevation — subtle on dark; depth comes from borders + lift */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 22px -8px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 24px 60px -18px rgba(0, 0, 0, 0.7);
+  --ring: 0 0 0 1px var(--line), var(--shadow-md);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --bg-glow: #ffffff;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --elevated: #ffffff;
+  --hover: #f1f3f7;
+
+  --line: #e7e9ef;
+  --line-strong: #d6dae3;
+
+  --txt: #11151c;
+  --mut: #5d6677;
+  --faint: #97a0b2;
+
+  --green: #0a9d6e;
+  --green-soft: #0a9d6e1f;
+  --red: #df3f3f;
+  --red-soft: #df3f3f1a;
+  --amber: #b87708;
+  --amber-soft: #b877081a;
+  --accent: #4f5be0;
+  --accent-soft: #4f5be016;
+  --accent-contrast: #ffffff;
+
+  --c1: #4f5be0;
+  --c2: #0a9d6e;
+  --c3: #d68910;
+  --c4: #df3f3f;
+  --c5: #7c5cf0;
+  --c6: #0ea5e9;
+  --c7: #db2777;
+  --c8: #0d9488;
+  --c9: #ca8a04;
+  --c10: #64748b;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 8px 24px -10px rgba(16, 24, 40, 0.18);
+  --shadow-lg: 0 28px 60px -22px rgba(16, 24, 40, 0.22);
+  --ring: 0 0 0 1px var(--line), var(--shadow-md);
+}
+
+/* Map runtime vars → Tailwind tokens (inline = reference, not snapshot) */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-elevated: var(--elevated);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-txt: var(--txt);
+  --color-mut: var(--mut);
+  --color-faint: var(--faint);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --color-amber: var(--amber);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Let `dark:` utilities (if ever needed) follow our attribute, not the OS */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ─────────────────────────────  base  ───────────────────────────────────── */
+
+* {
+  border-color: var(--line);
+}
+
+html {
+  background: var(--bg);
 }
 
 body {
-  background: var(--color-bg);
-  color: var(--color-txt);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--txt);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv01", "cv03", "ss01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+/* Atmospheric depth: a fixed, barely-there glow so the canvas isn't dead-flat */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 500px at 100% -5%, var(--accent-soft), transparent 60%),
+    radial-gradient(700px 500px at -10% 0%, var(--bg-glow), transparent 55%);
+  opacity: 0.7;
+}
+
+/* Tabular figures everywhere numbers live — non-negotiable for finance */
+.nums,
+table td,
+table th,
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--txt);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+/* Refined scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+  background-clip: content-box;
+}
+
+/* ───────────────────────────  motion  ───────────────────────────────────── */
+
+@keyframes vault-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes vault-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes vault-shimmer {
+  0% { background-position: -480px 0; }
+  100% { background-position: 480px 0; }
+}
+
+.animate-rise { animation: vault-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade { animation: vault-fade 0.4s ease both; }
+
+/* Staggered children for page-load cascades */
+.stagger > * { animation: vault-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.stagger > *:nth-child(3) { animation-delay: 0.10s; }
+.stagger > *:nth-child(4) { animation-delay: 0.14s; }
+.stagger > *:nth-child(5) { animation-delay: 0.18s; }
+.stagger > *:nth-child(6) { animation-delay: 0.22s; }
+.stagger > *:nth-child(7) { animation-delay: 0.26s; }
+.stagger > *:nth-child(8) { animation-delay: 0.30s; }
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--elevated) 0%,
+    var(--hover) 40%,
+    var(--elevated) 80%
+  );
+  background-size: 480px 100%;
+  animation: vault-shimmer 1.4s infinite linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  .stagger > *,
+  .animate-rise,
+  .animate-fade {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ─────────────────────  ag-grid theme bridge  ───────────────────────────── */
+/* The grid is themed via the JS Theming API (see data-grid.tsx). These only
+   handle semantic cell coloring that's easier in CSS than in params. */
+.ag-cell-inflow { color: var(--green); }
+.ag-cell-outflow { color: var(--txt); }
+.ag-cell-negative { color: var(--red); }
+.ag-cell-pos { color: var(--green); }
+.ag-cell-neg { color: var(--red); }
+.ag-cell-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
