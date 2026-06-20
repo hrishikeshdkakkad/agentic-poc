@@ -3,13 +3,18 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { parseToolResult } from "./tools";
 
 const MCP_URL = process.env.MCP_URL ?? "http://localhost:8000/mcp";
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN ?? "";
 
 // Survives route-module reloads in dev; one MCP session per server process.
 type G = typeof globalThis & { __mcpClient?: Promise<Client> };
 
 async function connect(): Promise<Client> {
   const client = new Client({ name: "finance-dashboard", version: "1.0.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(MCP_URL)));
+  // Bearer goes in a header (server-only; never the URL path → stays out of logs).
+  const requestInit: RequestInit | undefined = MCP_AUTH_TOKEN
+    ? { headers: { Authorization: `Bearer ${MCP_AUTH_TOKEN}` } }
+    : undefined;
+  await client.connect(new StreamableHTTPClientTransport(new URL(MCP_URL), { requestInit }));
   return client;
 }
 

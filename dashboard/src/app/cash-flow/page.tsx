@@ -1,14 +1,16 @@
 "use client";
 
-import Link from "next/link";
+import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useTool } from "@/lib/hooks";
-import { fmtDate, usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading, Stat } from "@/components/ui";
+import { usd } from "@/lib/format";
+import { Badge, Card, EmptyState, ErrorBanner, KpiCard, Loading, SkeletonStats } from "@/components/ui";
 import { IncomeExpenseBars } from "@/components/charts";
+import { ChipCell, DataCard, DateCell, numCol, usdFormatter, type ColDef } from "@/components/data-grid";
+import { IconArrowDownRight, IconArrowUpRight, IconSync } from "@/components/icons";
 
 type Income = {
-  months: Array<{ month: string; partial: boolean; income: number; expenses: number; net: number;
-    inflows_total: number; by_bucket: Record<string, number> }>;
+  months: Array<{ month: string; partial: boolean; income: number; expenses: number; net: number; inflows_total: number; by_bucket: Record<string, number> }>;
   estimated_monthly_income: number;
   avg_monthly_expenses: number;
   savings_rate: number | null;
@@ -16,131 +18,177 @@ type Income = {
   top_sources: Array<{ source: string; bucket: string; total: number; count: number }>;
   caveats: string[];
 };
+type Stream = {
+  merchant: string;
+  category: string | null;
+  cadence: string;
+  occurrences: number;
+  first_date: string;
+  last_date: string;
+  next_expected_date: string;
+  latest_amount: number;
+  median_amount: number;
+  is_fixed_amount: boolean;
+  price_change: { pct: number; from: number; to: number } | null;
+  annualized_cost: number;
+  monthly_equivalent: number;
+};
 type Recurring = {
-  streams: Array<{
-    merchant: string; category: string | null; cadence: string; occurrences: number;
-    first_date: string; last_date: string; next_expected_date: string;
-    latest_amount: number; median_amount: number; is_fixed_amount: boolean;
-    price_change: { pct: number; from: number; to: number } | null;
-    annualized_cost: number; monthly_equivalent: number;
-  }>;
+  streams: Stream[];
   monthly_recurring_total: number;
   annual_recurring_total: number;
   price_increases: string[];
 };
 
+function BarList({ items, max }: { items: Array<{ label: string; sub?: string; value: number }>; max: number }) {
+  return (
+    <div className="space-y-2.5">
+      {items.map((it) => (
+        <div key={it.label}>
+          <div className="flex items-center justify-between gap-3 text-[13px]">
+            <span className="truncate text-txt">
+              {it.label} {it.sub && <span className="text-faint">· {it.sub}</span>}
+            </span>
+            <span className="nums shrink-0 font-medium text-txt">{usd(it.value)}</span>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-line">
+            <div className="h-full rounded-full bg-accent" style={{ width: `${max ? (it.value / max) * 100 : 0}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function CashFlowPage() {
+  const router = useRouter();
   const income = useTool<Income>("get_income_analysis", { months: 6 });
   const recurring = useTool<Recurring>("get_recurring_analysis", { months: 6 });
 
   const inc = income.data;
   const rec = recurring.data;
 
+  const cols = useMemo<ColDef[]>(
+    () => [
+      {
+        field: "merchant",
+        headerName: "Merchant",
+        flex: 2,
+        minWidth: 200,
+        pinned: "left",
+        cellRenderer: (c: { data: Stream }) => (
+          <span className="flex items-center gap-2">
+            <span className="font-medium text-txt">{c.data.merchant}</span>
+            {!c.data.is_fixed_amount && <Badge tone="neutral">variable</Badge>}
+          </span>
+        ),
+      },
+      { field: "cadence", headerName: "Cadence", flex: 1, minWidth: 110, cellRenderer: ChipCell },
+      { field: "latest_amount", headerName: "Latest", ...numCol(), width: 120, valueFormatter: usdFormatter },
+      { field: "next_expected_date", headerName: "Next", width: 130, cellRenderer: DateCell, filter: "agDateColumnFilter" },
+      { field: "monthly_equivalent", headerName: "Monthly", ...numCol(), width: 120, valueFormatter: usdFormatter },
+      { field: "annualized_cost", headerName: "Annualized", ...numCol(), width: 130, valueFormatter: usdFormatter },
+      {
+        field: "price_change",
+        headerName: "Price change",
+        width: 170,
+        sortable: false,
+        filter: false,
+        cellDataType: false,
+        cellRenderer: (c: { data: Stream }) => {
+          const pc = c.data.price_change;
+          if (!pc) return <span className="text-faint">—</span>;
+          return (
+            <Badge tone={pc.pct > 0 ? "red" : "green"}>
+              {pc.pct > 0 ? "+" : ""}
+              {pc.pct}% · {usd(pc.from)}→{usd(pc.to)}
+            </Badge>
+          );
+        },
+      },
+    ],
+    [],
+  );
+
+  const topSources = (inc?.top_sources ?? []).map((s) => ({ label: s.source, sub: `${s.bucket} · ${s.count}×`, value: s.total }));
+  const buckets = Object.entries(inc?.by_bucket ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value]) => ({ label, value }));
+
   return (
-    <div className="mx-auto max-w-6xl">
-      <h1 className="mb-1 text-xl font-bold">Cash flow</h1>
-      <p className="mb-6 text-sm text-mut">Income vs expenses, and everything that bills you on a schedule.</p>
+    <div className="space-y-4">
       <ErrorBanner error={income.error ?? recurring.error} />
 
-      <div className="mb-4 grid gap-4 md:grid-cols-3">
-        <Card><Stat label="Est. monthly income" value={usd(inc?.estimated_monthly_income)}
-          sub="completed months only" /></Card>
-        <Card><Stat label="Avg monthly expenses" value={usd(inc?.avg_monthly_expenses)} /></Card>
-        <Card><Stat label="Savings rate"
-          value={inc?.savings_rate == null ? "—" : (
-            <span className={inc.savings_rate >= 0 ? "text-green" : "text-red"}>
-              {(inc.savings_rate * 100).toFixed(1)}%
-            </span>
-          )} /></Card>
-      </div>
+      {inc ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Est. monthly income" value={usd(inc.estimated_monthly_income)} icon={<IconArrowDownRight size={15} />} footnote="completed months" accent />
+          <KpiCard label="Avg monthly expenses" value={usd(inc.avg_monthly_expenses)} icon={<IconArrowUpRight size={15} />} />
+          <KpiCard
+            label="Savings rate"
+            value={inc.savings_rate == null ? "—" : <span className={inc.savings_rate >= 0 ? "text-green" : "text-red"}>{(inc.savings_rate * 100).toFixed(1)}%</span>}
+          />
+          <KpiCard label="Recurring / mo" value={usd(rec?.monthly_recurring_total)} icon={<IconSync size={15} />} footnote={rec ? `${usd(rec.annual_recurring_total)}/yr` : undefined} />
+        </div>
+      ) : income.error ? null : (
+        <SkeletonStats n={4} />
+      )}
 
-      <Card title="Income vs expenses by month">
+      <Card title="Income vs expenses" subtitle="last 6 months">
         {inc ? (
           <>
             <IncomeExpenseBars data={inc.months} />
-            {inc.months.some((m) => m.partial) && (
-              <div className="mt-1 text-xs text-mut">current month is partial</div>
-            )}
+            {inc.months.some((m) => m.partial) && <div className="mt-1 text-xs text-faint">Current month is partial.</div>}
           </>
-        ) : income.error ? null : <Loading />}
+        ) : income.error ? null : (
+          <Loading />
+        )}
       </Card>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card title="Top income sources">
           {inc ? (
-            <table className="w-full text-sm">
-              <tbody>
-                {inc.top_sources.map((s) => (
-                  <tr key={s.source} className="border-t border-line first:border-0">
-                    <td className="py-1.5">{s.source}</td>
-                    <td className="py-1.5 text-mut">{s.bucket}</td>
-                    <td className="py-1.5 text-right text-mut">{s.count}×</td>
-                    <td className="py-1.5 text-right font-medium">{usd(s.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : income.error ? null : <Loading />}
+            topSources.length ? (
+              <BarList items={topSources} max={Math.max(...topSources.map((s) => s.value), 1)} />
+            ) : (
+              <EmptyState title="No income detected" />
+            )
+          ) : (
+            <Loading />
+          )}
           {inc?.caveats.map((c, i) => (
-            <p key={i} className="mt-2 text-xs text-mut">※ {c}</p>
+            <p key={i} className="mt-3 text-xs text-faint">
+              ※ {c}
+            </p>
           ))}
         </Card>
-        <Card title="Inflows by bucket (window total)">
-          {inc ? (
-            <table className="w-full text-sm">
-              <tbody>
-                {Object.entries(inc.by_bucket).sort((a, b) => b[1] - a[1]).map(([bucket, total]) => (
-                  <tr key={bucket} className="border-t border-line first:border-0">
-                    <td className="py-1.5">{bucket}</td>
-                    <td className="py-1.5 text-right font-medium">{usd(total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : income.error ? null : <Loading />}
+        <Card title="Inflows by bucket" subtitle="window total">
+          {inc ? <BarList items={buckets} max={Math.max(...buckets.map((b) => b.value), 1)} /> : <Loading />}
         </Card>
       </div>
 
-      <Card className="mt-4"
-        title={`Recurring (${usd(rec?.monthly_recurring_total)}/mo · ${usd(rec?.annual_recurring_total)}/yr)`}>
-        {rec ? (
-          rec.streams.length ? (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                  <th className="py-2">Merchant</th><th>Cadence</th>
-                  <th className="text-right">Latest</th><th>Next expected</th>
-                  <th className="text-right">Annualized</th><th>Price change</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rec.streams.map((s) => (
-                  <tr key={s.merchant} className="border-t border-line">
-                    <td className="py-2">
-                      <Link className="hover:text-accent" href={`/transactions?merchant=${encodeURIComponent(s.merchant)}`}>
-                        {s.merchant}
-                      </Link>
-                      {!s.is_fixed_amount && <span className="ml-1.5 text-[10px] text-mut">variable</span>}
-                      <div className="text-xs text-mut">{s.category ?? ""} · {s.occurrences}× since {fmtDate(s.first_date)}</div>
-                    </td>
-                    <td className="py-2 text-mut">{s.cadence}</td>
-                    <td className="py-2 text-right">{usd(s.latest_amount)}</td>
-                    <td className="py-2 text-mut">{fmtDate(s.next_expected_date)}</td>
-                    <td className="py-2 text-right">{usd(s.annualized_cost)}</td>
-                    <td className="py-2">
-                      {s.price_change ? (
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${s.price_change.pct > 0 ? "bg-red/15 text-red" : "bg-green/15 text-green"}`}>
-                          {s.price_change.pct > 0 ? "+" : ""}{s.price_change.pct}% ({usd(s.price_change.from)} → {usd(s.price_change.to)})
-                        </span>
-                      ) : <span className="text-mut">—</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <div className="text-mut">No recurring streams detected yet.</div>
-        ) : recurring.error ? null : <Loading />}
-      </Card>
+      {rec ? (
+        rec.streams.length ? (
+          <DataCard<Stream>
+            title="Recurring streams"
+            subtitle={`${usd(rec.monthly_recurring_total)}/mo · ${usd(rec.annual_recurring_total)}/yr · click a row to see transactions`}
+            icon={<IconSync size={16} />}
+            rowData={rec.streams}
+            columnDefs={cols}
+            getRowId={(p) => p.data.merchant}
+            onRowClicked={(e) => router.push(`/transactions?merchant=${encodeURIComponent(e.data.merchant)}`)}
+            countLabel="streams"
+            exportName="recurring"
+            pagination={false}
+            height={Math.min(560, 120 + rec.streams.length * 44)}
+          />
+        ) : (
+          <Card>
+            <EmptyState icon={<IconSync size={20} />} title="No recurring streams detected yet" description="As more history syncs, subscriptions and bills will surface here." />
+          </Card>
+        )
+      ) : recurring.error ? null : (
+        <Loading />
+      )}
     </div>
   );
 }

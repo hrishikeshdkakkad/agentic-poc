@@ -1,23 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTool } from "@/lib/hooks";
 import { fmtDate, pct, usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading, Stat, WarningsBanner, Warning } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Drawer,
+  EmptyState,
+  ErrorBanner,
+  inputCls,
+  KpiCard,
+  Loading,
+  SkeletonStats,
+  WarningsBanner,
+  Warning,
+} from "@/components/ui";
+import {
+  ChipCell,
+  DataCard,
+  numCol,
+  pctFormatter,
+  usdFormatter,
+  type ColDef,
+} from "@/components/data-grid";
+import { IconAlert, IconDebt } from "@/components/icons";
 
 type Scenario = { monthly_payment: number; months: number | null; total_interest: number | null; verdict: string };
 type Debt = {
-  account_id: string; institution: string | null; name: string | null;
-  liability_type: string; balance: number; apr_percentage: number | null;
-  minimum_payment: number | null; next_payment_due_date: string | null;
-  is_overdue: boolean | null; credit_limit: number | null;
-  utilization_pct: number | null; monthly_interest_if_carried: number | null;
+  account_id: string;
+  institution: string | null;
+  name: string | null;
+  liability_type: string;
+  balance: number;
+  apr_percentage: number | null;
+  minimum_payment: number | null;
+  next_payment_due_date: string | null;
+  is_overdue: boolean | null;
+  credit_limit: number | null;
+  utilization_pct: number | null;
+  monthly_interest_if_carried: number | null;
   payoff_scenarios: Scenario[] | null;
 };
 type DebtAnalysis = {
-  as_of: string | null; debts: Debt[]; zero_balance_debts: number;
-  total_debt: number; weighted_apr_percentage: number | null;
-  total_monthly_interest_if_carried: number; total_minimum_payments: number;
+  as_of: string | null;
+  debts: Debt[];
+  zero_balance_debts: number;
+  total_debt: number;
+  weighted_apr_percentage: number | null;
+  total_monthly_interest_if_carried: number;
+  total_minimum_payments: number;
 };
 type Liabilities = {
   credit: Array<Record<string, unknown>>;
@@ -26,151 +59,187 @@ type Liabilities = {
   warnings?: Warning[];
 };
 
+function UtilCell(p: { value: number | null }) {
+  if (p.value == null) return <span className="ag-cell-num text-faint">—</span>;
+  const hot = p.value > 30;
+  return <span className={`ag-cell-num ${hot ? "text-red" : "text-mut"}`}>{pct(p.value)}</span>;
+}
+
 export default function DebtPage() {
   const [paymentInput, setPaymentInput] = useState("");
   const [payment, setPayment] = useState<number | null>(null);
   const debt = useTool<DebtAnalysis>("get_debt_analysis", payment ? { monthly_payment: payment } : {});
   const [showLive, setShowLive] = useState(false);
   const live = useTool<Liabilities>(showLive ? "get_liabilities" : "");
-  const [openDebt, setOpenDebt] = useState<string | null>(null);
+  const [openDebt, setOpenDebt] = useState<Debt | null>(null);
 
   const d = debt.data;
 
+  const cols = useMemo<ColDef[]>(
+    () => [
+      {
+        field: "institution",
+        headerName: "Debt",
+        flex: 2,
+        minWidth: 200,
+        pinned: "left",
+        cellRenderer: (c: { data: Debt }) => (
+          <span className="flex items-center gap-2">
+            <span className="font-medium text-txt">
+              {c.data.institution ?? "?"} {c.data.name ?? ""}
+            </span>
+            {c.data.is_overdue && <Badge tone="red">overdue</Badge>}
+          </span>
+        ),
+      },
+      { field: "liability_type", headerName: "Type", flex: 1, minWidth: 120, cellRenderer: ChipCell },
+      { field: "balance", headerName: "Balance", ...numCol(), width: 130, valueFormatter: usdFormatter },
+      { field: "apr_percentage", headerName: "APR", ...numCol(), width: 100, valueFormatter: pctFormatter },
+      { field: "minimum_payment", headerName: "Min pay", ...numCol(), width: 120, valueFormatter: usdFormatter },
+      { field: "utilization_pct", headerName: "Utilization", ...numCol(), width: 120, cellRenderer: UtilCell },
+      { field: "monthly_interest_if_carried", headerName: "Interest/mo", ...numCol(), width: 130, valueFormatter: usdFormatter },
+    ],
+    [],
+  );
+
   return (
-    <div className="mx-auto max-w-5xl">
-      <h1 className="mb-1 text-xl font-bold">Debt</h1>
-      <p className="mb-6 text-sm text-mut">
-        Every carried debt with its true carrying cost{d?.as_of ? ` (snapshot ${d.as_of})` : ""}.
-      </p>
+    <div className="space-y-4">
       <ErrorBanner error={debt.error} />
 
-      <div className="mb-4 grid gap-4 md:grid-cols-4">
-        <Card><Stat label="Total debt" value={usd(d?.total_debt)}
-          sub={d?.zero_balance_debts ? `${d.zero_balance_debts} paid-off account(s) hidden` : undefined} /></Card>
-        <Card><Stat label="Weighted APR" value={pct(d?.weighted_apr_percentage)} /></Card>
-        <Card><Stat label="Monthly interest if carried" value={usd(d?.total_monthly_interest_if_carried)} /></Card>
-        <Card><Stat label="Minimum payments" value={usd(d?.total_minimum_payments)} /></Card>
-      </div>
+      {d ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Total debt" value={usd(d.total_debt)} icon={<IconDebt size={15} />} footnote={d.zero_balance_debts ? `${d.zero_balance_debts} paid-off hidden` : undefined} accent />
+          <KpiCard label="Weighted APR" value={pct(d.weighted_apr_percentage)} />
+          <KpiCard label="Interest / mo" value={usd(d.total_monthly_interest_if_carried)} footnote="if carried" />
+          <KpiCard label="Minimum payments" value={usd(d.total_minimum_payments)} footnote="per month" />
+        </div>
+      ) : debt.error ? null : (
+        <SkeletonStats n={4} />
+      )}
 
-      <Card title="Carried debts"
-        right={
-          <form className="flex gap-2"
-            onSubmit={(e) => { e.preventDefault(); setPayment(Number(paymentInput) || null); }}>
-            <input className="w-36 rounded-md border border-line bg-bg px-2 py-1 text-sm"
-              type="number" placeholder="Simulate $/mo" value={paymentInput}
-              onChange={(e) => setPaymentInput(e.target.value)} />
-            <button className="rounded-lg border border-line px-3 py-1 text-sm font-semibold">Simulate</button>
-          </form>
-        }>
-        {d ? (
-          d.debts.length ? (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                  <th className="py-2">Debt</th><th>Type</th><th className="text-right">Balance</th>
-                  <th className="text-right">APR</th><th className="text-right">Min pay</th>
-                  <th className="text-right">Utilization</th><th className="text-right">Interest/mo</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.debts.map((row) => (
-                  <DebtRow key={`${row.account_id}-${row.liability_type}`} row={row}
-                    open={openDebt === row.account_id}
-                    onToggle={() => setOpenDebt(openDebt === row.account_id ? null : row.account_id)} />
-                ))}
-              </tbody>
-            </table>
-          ) : <div className="text-mut">No carried debt. 🎉</div>
-        ) : debt.error ? null : <Loading />}
-        <p className="mt-3 text-xs text-mut">
-          Click a debt to see payoff scenarios. Add a monthly payment above to simulate your own plan.
-        </p>
-      </Card>
+      {d ? (
+        d.debts.length ? (
+          <DataCard<Debt>
+            title="Carried debts"
+            subtitle={`Click a row for payoff scenarios${d.as_of ? ` · snapshot ${d.as_of}` : ""}`}
+            icon={<IconDebt size={16} />}
+            rowData={d.debts}
+            columnDefs={cols}
+            getRowId={(p) => `${p.data.account_id}-${p.data.liability_type}`}
+            onRowClicked={(e) => setOpenDebt(e.data)}
+            countLabel="debts"
+            exportName="debts"
+            pagination={false}
+            height={Math.min(480, 120 + d.debts.length * 44)}
+            actions={
+              <form
+                className="flex items-end gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setPayment(Number(paymentInput) || null);
+                }}
+              >
+                <input className={`${inputCls} w-32`} type="number" placeholder="Simulate $/mo" value={paymentInput} onChange={(e) => setPaymentInput(e.target.value)} />
+                <Button type="submit" size="sm" variant="secondary">
+                  Simulate
+                </Button>
+              </form>
+            }
+          />
+        ) : (
+          <Card>
+            <EmptyState icon={<IconDebt size={20} />} title="No carried debt 🎉" description="Every balance is paid off. Nothing accruing interest." />
+          </Card>
+        )
+      ) : debt.error ? null : (
+        <Loading />
+      )}
 
-      <Card className="mt-4" title="Live liability detail"
+      <Card
+        title="Live liability detail"
+        subtitle="Statement balances, due dates, and overdue flags straight from each institution"
         right={
-          <button onClick={() => setShowLive(!showLive)}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm font-semibold">
+          <Button variant="secondary" size="sm" onClick={() => setShowLive(!showLive)}>
             {showLive ? "Hide" : "Load (live Plaid)"}
-          </button>
-        }>
+          </Button>
+        }
+      >
         {!showLive ? (
-          <div className="text-sm text-mut">Statement balances, due dates, and overdue flags straight from each institution.</div>
+          <div className="text-sm text-mut">On-demand — pulls fresh data directly from each bank.</div>
         ) : live.data ? (
           <>
             <WarningsBanner warnings={live.data.warnings} />
-            {(["credit", "student", "mortgage"] as const).map((kind) =>
-              live.data![kind].length ? (
-                <div key={kind} className="mb-4">
-                  <div className="mb-1 text-xs uppercase tracking-wide text-mut">{kind}</div>
-                  {live.data![kind].map((item, i) => (
-                    <div key={i} className="grid gap-x-6 gap-y-1 border-t border-line py-2 text-sm md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {(["credit", "student", "mortgage"] as const).flatMap((kind) =>
+                live.data![kind].map((item, i) => (
+                  <div key={`${kind}-${i}`} className="rounded-[var(--radius)] border border-line bg-elevated p-4">
+                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-mut">{kind}</div>
+                    <dl className="space-y-1.5 text-sm">
                       {Object.entries(item)
                         .filter(([k, v]) => v != null && k !== "account_id")
                         .map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3">
-                            <span className="text-mut">{k.replace(/_/g, " ")}</span>
-                            <span>{typeof v === "number" ? (k.includes("percentage") ? pct(v) : usd(v)) : String(v)}</span>
+                            <dt className="text-mut">{k.replace(/_/g, " ")}</dt>
+                            <dd className="nums font-medium text-txt">{typeof v === "number" ? (k.includes("percentage") ? pct(v) : usd(v)) : String(v)}</dd>
                           </div>
                         ))}
-                    </div>
-                  ))}
-                </div>
-              ) : null,
-            )}
+                    </dl>
+                  </div>
+                )),
+              )}
+            </div>
           </>
-        ) : live.error ? <ErrorBanner error={live.error} /> : <Loading />}
+        ) : live.error ? (
+          <ErrorBanner error={live.error} />
+        ) : (
+          <Loading />
+        )}
       </Card>
-    </div>
-  );
-}
 
-function DebtRow({ row, open, onToggle }: { row: Debt; open: boolean; onToggle(): void }) {
-  return (
-    <>
-      <tr className="cursor-pointer border-t border-line hover:bg-bg/50" onClick={onToggle}>
-        <td className="py-2 font-medium">
-          {row.institution ?? "?"} {row.name ?? ""}
-          {row.is_overdue && <span className="ml-2 rounded-full bg-red/15 px-2 py-0.5 text-[10px] font-semibold text-red">OVERDUE</span>}
-        </td>
-        <td className="py-2 text-mut">{row.liability_type}</td>
-        <td className="py-2 text-right">{usd(row.balance)}</td>
-        <td className="py-2 text-right text-mut">{pct(row.apr_percentage)}</td>
-        <td className="py-2 text-right text-mut">{usd(row.minimum_payment)}</td>
-        <td className={`py-2 text-right ${row.utilization_pct != null && row.utilization_pct > 30 ? "text-red" : "text-mut"}`}>
-          {pct(row.utilization_pct)}
-        </td>
-        <td className="py-2 text-right text-mut">{usd(row.monthly_interest_if_carried)}</td>
-      </tr>
-      {open && (
-        <tr className="border-t border-line bg-bg/40">
-          <td colSpan={7} className="px-3 py-3">
-            {row.next_payment_due_date && (
-              <div className="mb-2 text-sm text-mut">next payment due {fmtDate(row.next_payment_due_date)}</div>
+      <Drawer open={!!openDebt} onClose={() => setOpenDebt(null)} title={openDebt ? `${openDebt.institution ?? "?"} ${openDebt.name ?? ""}` : undefined} subtitle={openDebt?.liability_type}>
+        {openDebt && (
+          <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-4">
+              <KpiCard label="Balance" value={usd(openDebt.balance)} />
+              <KpiCard label="APR" value={pct(openDebt.apr_percentage)} />
+            </div>
+            {openDebt.next_payment_due_date && (
+              <div className="flex items-center gap-2 rounded-[var(--radius)] border border-line bg-elevated px-4 py-3 text-sm">
+                <IconAlert size={16} className="text-amber" />
+                <span className="text-mut">Next payment due</span>
+                <span className="font-medium text-txt">{fmtDate(openDebt.next_payment_due_date)}</span>
+              </div>
             )}
-            {row.payoff_scenarios?.length ? (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                    <th className="py-1">Payment/mo</th><th>Months to payoff</th>
-                    <th className="text-right">Total interest</th><th>Verdict</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {row.payoff_scenarios.map((s, i) => (
-                    <tr key={i} className="border-t border-line">
-                      <td className="py-1.5">{usd(s.monthly_payment)}</td>
-                      <td className="py-1.5">{s.months ?? "—"}</td>
-                      <td className="py-1.5 text-right">{usd(s.total_interest)}</td>
-                      <td className="py-1.5 text-mut">{s.verdict}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div className="text-sm text-mut">No APR on file — scenarios unavailable.</div>}
-          </td>
-        </tr>
-      )}
-    </>
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-mut">Payoff scenarios</div>
+              {openDebt.payoff_scenarios?.length ? (
+                <div className="overflow-hidden rounded-[var(--radius)] border border-line">
+                  <table className="w-full text-sm">
+                    <thead className="bg-elevated text-left text-[11px] uppercase tracking-wide text-mut">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Payment</th>
+                        <th className="px-3 py-2 font-semibold">Months</th>
+                        <th className="px-3 py-2 text-right font-semibold">Interest</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openDebt.payoff_scenarios.map((s, i) => (
+                        <tr key={i} className="border-t border-line">
+                          <td className="nums px-3 py-2">{usd(s.monthly_payment)}/mo</td>
+                          <td className="nums px-3 py-2">{s.months ?? "—"}</td>
+                          <td className="nums px-3 py-2 text-right">{usd(s.total_interest)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-sm text-mut">No APR on file — scenarios unavailable.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </Drawer>
+    </div>
   );
 }

@@ -1,203 +1,248 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSWRConfig } from "swr";
 import { useTool } from "@/lib/hooks";
-import { linkFetch } from "@/lib/api";
-import { fmtDate, pct, usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading, Money, Stat } from "@/components/ui";
-import { AllocationDonut } from "@/components/charts";
+import { callTool } from "@/lib/api";
+import { pct, usd } from "@/lib/format";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  KpiCard,
+  Loading,
+  SkeletonStats,
+  Spinner,
+} from "@/components/ui";
+import { AllocationDonut, DonutLegend } from "@/components/charts";
+import {
+  ChipCell,
+  DataCard,
+  DateCell,
+  makeGainCell,
+  MoneyCell,
+  numCol,
+  pctFormatter,
+  type ColDef,
+} from "@/components/data-grid";
+import { IconInvestments, IconSparkle, IconSync, IconWallet } from "@/components/icons";
 
+type Position = {
+  symbol: string | null;
+  name: string | null;
+  security_type: string | null;
+  quantity: number;
+  market_value: number;
+  weight_pct: number | null;
+  cost_basis: number | null;
+  basis_known: boolean;
+  unrealized_gain: number | null;
+  unrealized_pct: number | null;
+  cash_like: boolean;
+  accounts: number;
+};
 type Portfolio = {
   as_of: string | null;
   total_value: number;
   cash_like_value: number;
   invested_value: number;
-  positions: Array<{
-    symbol: string | null; name: string | null; security_type: string | null;
-    quantity: number; market_value: number; weight_pct: number | null;
-    cost_basis: number | null; basis_known: boolean;
-    unrealized_gain: number | null; unrealized_pct: number | null;
-    cash_like: boolean; accounts: number;
-  }>;
+  positions: Position[];
   allocation_by_type: Record<string, number>;
-  concentration: { top_position: { symbol: string | null; weight_pct: number | null }; top5_weight_pct: number } | null;
+  concentration: {
+    top_position: { symbol: string | null; weight_pct: number | null };
+    top5_weight_pct: number;
+  } | null;
   basis_coverage_pct: number | null;
   total_unrealized_gain: number | null;
 };
 type InvTx = {
-  date?: string; name?: string; symbol?: string | null; security_name?: string | null;
-  type?: string; subtype?: string; amount?: number;
+  date?: string;
+  name?: string;
+  symbol?: string | null;
+  security_name?: string | null;
+  type?: string;
+  subtype?: string;
+  amount?: number;
 };
-type InvTxs = {
-  investment_transactions: InvTx[];
-  total_matching?: number;
-};
-
-const ACTIVITY_PAGE = 50;
+type InvTxs = { investment_transactions: InvTx[]; total_matching?: number };
+type ActivityRow = { date: string; symbol: string; description: string; kind: string; amount: number };
 
 export default function InvestmentsPage() {
   const portfolio = useTool<Portfolio>("get_portfolio_analysis");
+  const activity = useTool<InvTxs>("list_investment_transactions", { limit: 2000, offset: 0 });
   const { mutate } = useSWRConfig();
-  // Persisted, zero-Plaid read from the local history store — instant, paged.
-  const [offset, setOffset] = useState(0);
-  const activity = useTool<InvTxs>("list_investment_transactions", { limit: ACTIVITY_PAGE, offset });
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState("");
+
+  const p = portfolio.data;
+  const gain = p?.total_unrealized_gain;
 
   async function refreshFromPlaid() {
     setRefreshing(true);
-    setRefreshMsg("Pulling latest from Plaid…");
     try {
-      await linkFetch("sync", { method: "POST" });
-      setRefreshMsg("");
-      setOffset(0);
-      // Revalidate every cached page of this tool, not just the one in view.
+      await callTool("sync_now");
       await mutate((key) => Array.isArray(key) && key[0] === "tool:list_investment_transactions");
-    } catch (e) {
-      setRefreshMsg(e instanceof Error ? e.message : "sync failed");
     } finally {
       setRefreshing(false);
     }
   }
 
-  const p = portfolio.data;
-  const gain = p?.total_unrealized_gain;
-  const txs = activity.data?.investment_transactions ?? [];
-  const total = activity.data?.total_matching ?? 0;
+  const allocation = useMemo(
+    () =>
+      p
+        ? Object.entries(p.allocation_by_type)
+            .map(([name, value]) => ({ name, value }))
+            .sort((a, b) => b.value - a.value)
+        : [],
+    [p],
+  );
+
+  const activityRows = useMemo<ActivityRow[]>(
+    () =>
+      (activity.data?.investment_transactions ?? []).map((t) => ({
+        date: t.date ?? "",
+        symbol: t.symbol ?? "—",
+        description: t.name ?? t.security_name ?? "—",
+        kind: t.subtype ?? t.type ?? "—",
+        amount: t.amount ?? 0,
+      })),
+    [activity.data],
+  );
+
+  const positionCols = useMemo<ColDef[]>(
+    () => [
+      {
+        field: "symbol",
+        headerName: "Symbol",
+        width: 130,
+        pinned: "left",
+        cellRenderer: (c: { data: Position }) => (
+          <span className="flex items-center gap-2">
+            <span className="font-semibold text-txt">{c.data.symbol ?? "?"}</span>
+            {c.data.cash_like && <Badge tone="neutral">cash</Badge>}
+          </span>
+        ),
+      },
+      { field: "name", headerName: "Name", flex: 2, minWidth: 180 },
+      { field: "security_type", headerName: "Type", flex: 1, minWidth: 120, cellRenderer: ChipCell },
+      { field: "quantity", headerName: "Qty", ...numCol(), width: 110, valueFormatter: (v) => Number(v.value).toLocaleString(undefined, { maximumFractionDigits: 4 }) },
+      { field: "market_value", headerName: "Value", ...numCol(), width: 130, cellRenderer: MoneyCell },
+      { field: "weight_pct", headerName: "Weight", ...numCol(), width: 100, valueFormatter: pctFormatter },
+      {
+        field: "cost_basis",
+        headerName: "Basis",
+        ...numCol(),
+        width: 120,
+        valueFormatter: (v) => (v.data.basis_known ? usd(Number(v.value)) : "—"),
+      },
+      { field: "unrealized_gain", headerName: "Gain", ...numCol(), width: 150, cellRenderer: makeGainCell("unrealized_pct") },
+    ],
+    [],
+  );
+
+  const activityCols = useMemo<ColDef[]>(
+    () => [
+      { field: "date", headerName: "Date", cellRenderer: DateCell, width: 130, sort: "desc", filter: "agDateColumnFilter" },
+      { field: "symbol", headerName: "Symbol", width: 120, cellRenderer: (c: { value: string }) => <span className="font-medium text-txt">{c.value}</span> },
+      { field: "description", headerName: "Description", flex: 2, minWidth: 200 },
+      { field: "kind", headerName: "Type", flex: 1, minWidth: 120, cellRenderer: ChipCell },
+      { field: "amount", headerName: "Amount", ...numCol(), width: 140, cellRenderer: MoneyCell, filter: "agNumberColumnFilter" },
+    ],
+    [],
+  );
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <h1 className="mb-1 text-xl font-bold">Investments</h1>
-      <p className="mb-6 text-sm text-mut">
-        Positions at the latest holdings snapshot{p?.as_of ? ` (${p.as_of})` : ""}.
-      </p>
+    <div className="space-y-4">
       <ErrorBanner error={portfolio.error} />
 
-      <div className="mb-4 grid gap-4 md:grid-cols-4">
-        <Card><Stat label="Total value" value={usd(p?.total_value)} /></Card>
-        <Card><Stat label="Invested" value={usd(p?.invested_value)} /></Card>
-        <Card><Stat label="Cash-like" value={usd(p?.cash_like_value)} /></Card>
-        <Card>
-          <Stat label="Unrealized gain"
-            value={gain == null ? "—" : (
-              <span className={gain >= 0 ? "text-green" : "text-red"}>{gain >= 0 ? "+" : ""}{usd(gain)}</span>
-            )}
-            sub={p?.basis_coverage_pct != null && p.basis_coverage_pct < 100
-              ? `basis known for ${p.basis_coverage_pct}% of value`
-              : undefined} />
-        </Card>
-      </div>
+      {p ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Total value" value={usd(p.total_value)} icon={<IconInvestments size={15} />} accent footnote={p.as_of ? `as of ${p.as_of}` : undefined} />
+          <KpiCard label="Invested" value={usd(p.invested_value)} icon={<IconSparkle size={15} />} />
+          <KpiCard label="Cash-like" value={usd(p.cash_like_value)} icon={<IconWallet size={15} />} />
+          <KpiCard
+            label="Unrealized gain"
+            value={gain == null ? "—" : <span className={gain >= 0 ? "text-green" : "text-red"}>{gain >= 0 ? "+" : "−"}{usd(Math.abs(gain))}</span>}
+            footnote={p.basis_coverage_pct != null && p.basis_coverage_pct < 100 ? `basis: ${p.basis_coverage_pct}% of value` : undefined}
+          />
+        </div>
+      ) : portfolio.error ? null : (
+        <SkeletonStats n={4} />
+      )}
 
-      <div className="mb-4 grid gap-4 md:grid-cols-2">
-        <Card title="Allocation by type">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card title="Allocation by type" className="lg:col-span-2">
           {p ? (
-            Object.keys(p.allocation_by_type).length
-              ? <AllocationDonut data={Object.entries(p.allocation_by_type).map(([name, value]) => ({ name, value }))} />
-              : <div className="text-mut">No holdings snapshots yet — run a sync.</div>
-          ) : portfolio.error ? null : <Loading />}
+            allocation.length ? (
+              <div className="grid items-center gap-4 sm:grid-cols-2">
+                <AllocationDonut data={allocation} centerLabel="total" centerValue={usd(p.total_value)} />
+                <DonutLegend data={allocation} total={p.total_value} />
+              </div>
+            ) : (
+              <EmptyState icon={<IconInvestments size={20} />} title="No holdings snapshots yet" description="Run a sync to pull your positions from Plaid." />
+            )
+          ) : portfolio.error ? null : (
+            <Loading />
+          )}
         </Card>
+
         <Card title="Concentration">
           {p?.concentration ? (
-            <div className="space-y-2 text-sm">
-              <div>Top position: <b>{p.concentration.top_position.symbol ?? "?"}</b>{" "}
-                at <b>{pct(p.concentration.top_position.weight_pct)}</b> of portfolio</div>
-              <div>Top 5 positions: <b>{pct(p.concentration.top5_weight_pct)}</b></div>
+            <div className="space-y-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] text-mut">Top position</div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-semibold tracking-tight text-txt">{p.concentration.top_position.symbol ?? "?"}</span>
+                  <span className="nums text-sm text-mut">{pct(p.concentration.top_position.weight_pct)} of portfolio</span>
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] text-mut">Top 5 positions</div>
+                <div className="nums mt-1 text-2xl font-semibold tracking-tight text-txt">{pct(p.concentration.top5_weight_pct)}</div>
+              </div>
               {p.concentration.top5_weight_pct > 60 && (
-                <div className="text-amber">⚠ concentrated — top 5 hold most of the portfolio</div>
+                <Badge tone="amber" dot>
+                  Concentrated — top 5 hold most of the book
+                </Badge>
               )}
             </div>
-          ) : <div className="text-mut">—</div>}
+          ) : (
+            <div className="text-sm text-mut">—</div>
+          )}
         </Card>
       </div>
 
-      <Card title="Positions">
-        {p ? (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                <th className="py-2">Symbol</th><th>Name</th><th>Type</th>
-                <th className="text-right">Qty</th><th className="text-right">Value</th>
-                <th className="text-right">Weight</th><th className="text-right">Basis</th>
-                <th className="text-right">Gain</th>
-              </tr>
-            </thead>
-            <tbody>
-              {p.positions.map((pos, i) => (
-                <tr key={i} className="border-t border-line">
-                  <td className="py-2 font-medium">
-                    {pos.symbol ?? "?"}
-                    {pos.cash_like && <span className="ml-1.5 rounded-full bg-mut/15 px-1.5 py-0.5 text-[10px] text-mut">cash</span>}
-                  </td>
-                  <td className="max-w-56 truncate py-2 text-mut">{pos.name ?? "—"}</td>
-                  <td className="py-2 text-mut">{pos.security_type ?? "—"}</td>
-                  <td className="py-2 text-right">{pos.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                  <td className="py-2 text-right">{usd(pos.market_value)}</td>
-                  <td className="py-2 text-right text-mut">{pct(pos.weight_pct)}</td>
-                  <td className="py-2 text-right text-mut">{pos.basis_known ? usd(pos.cost_basis) : "?"}</td>
-                  <td className="py-2 text-right">
-                    {pos.unrealized_gain == null ? <span className="text-mut">?</span> : (
-                      <span className={pos.unrealized_gain >= 0 ? "text-green" : "text-red"}>
-                        {pos.unrealized_gain >= 0 ? "+" : ""}{usd(pos.unrealized_gain)}
-                        {pos.unrealized_pct != null && <span className="ml-1 text-xs">({pos.unrealized_pct > 0 ? "+" : ""}{pos.unrealized_pct}%)</span>}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : portfolio.error ? null : <Loading />}
-      </Card>
+      {p ? (
+        <DataCard<Position>
+          title="Positions"
+          icon={<IconInvestments size={16} />}
+          rowData={p.positions}
+          columnDefs={positionCols}
+          countLabel="positions"
+          exportName="positions"
+          pagination={false}
+          height={Math.min(520, 120 + p.positions.length * 44)}
+        />
+      ) : portfolio.error ? null : (
+        <Loading />
+      )}
 
-      <Card className="mt-4" title="Investment activity"
-        right={
-          <button onClick={refreshFromPlaid} disabled={refreshing}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm font-semibold disabled:opacity-50">
-            {refreshing ? "Refreshing…" : "Refresh from Plaid"}
-          </button>
-        }>
-        {activity.data ? (
-          total ? (
-            <>
-              <div className="mb-2 text-xs text-mut">
-                Trades, dividends &amp; fees from your synced history — instant, no Plaid call.
-              </div>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-mut">
-                    <th className="py-2">Date</th><th>Symbol</th><th>Description</th>
-                    <th>Type</th><th className="text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {txs.map((t, i) => (
-                    <tr key={i} className="border-t border-line">
-                      <td className="py-2 text-mut">{fmtDate(t.date)}</td>
-                      <td className="py-2 font-medium">{t.symbol ?? "—"}</td>
-                      <td className="max-w-56 truncate py-2">{t.name ?? t.security_name ?? "—"}</td>
-                      <td className="py-2 text-mut">{t.subtype ?? t.type ?? "—"}</td>
-                      <td className="py-2 text-right"><Money amount={t.amount} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="mt-4 flex items-center justify-between text-sm">
-                <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - ACTIVITY_PAGE))}
-                  className="rounded-lg border border-line px-3 py-1.5 font-semibold disabled:opacity-40">← Prev</button>
-                <span className="text-mut">{offset + 1}–{Math.min(offset + ACTIVITY_PAGE, total)} of {total.toLocaleString()}</span>
-                <button disabled={offset + ACTIVITY_PAGE >= total} onClick={() => setOffset(offset + ACTIVITY_PAGE)}
-                  className="rounded-lg border border-line px-3 py-1.5 font-semibold disabled:opacity-40">Next →</button>
-              </div>
-            </>
-          ) : (
-            <div className="text-sm text-mut">
-              No investment transactions stored yet. Click &ldquo;Refresh from Plaid&rdquo; to pull them in.
-            </div>
-          )
-        ) : activity.error ? <ErrorBanner error={activity.error} /> : <Loading />}
-        {refreshMsg && <div className="mt-2 text-xs text-mut">{refreshMsg}</div>}
-      </Card>
+      <DataCard<ActivityRow>
+        title="Investment activity"
+        subtitle="Trades, dividends & fees from your synced history — instant, no Plaid call"
+        icon={<IconSync size={16} />}
+        rowData={activityRows}
+        columnDefs={activityCols}
+        countLabel="transactions"
+        exportName="investment-activity"
+        height="calc(100vh - 280px)"
+        actions={
+          <Button variant="secondary" size="sm" disabled={refreshing} onClick={refreshFromPlaid} icon={refreshing ? <Spinner size={14} /> : <IconSync size={14} />}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
+      />
     </div>
   );
 }

@@ -4,47 +4,47 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTool } from "@/lib/hooks";
 import { usd } from "@/lib/format";
-import { Card, ErrorBanner, Loading } from "@/components/ui";
+import { Button, Card, cx, Delta, EmptyState, ErrorBanner, inputCls, KpiCard, Loading, Segmented, SkeletonStats } from "@/components/ui";
 import { StackedMonthlyBars } from "@/components/charts";
+import { DataCard, makeBarCell, numCol, usdFormatter, type ColDef } from "@/components/data-grid";
+import { IconSpending } from "@/components/icons";
 
 type AggRow = { month?: string; category?: string; merchant?: string; total: number; transaction_count: number };
 type Agg = { rows: AggRow[]; grand_total: number };
 type Compare = {
-  total_a: number; total_b: number; delta: number; delta_pct: number | null;
+  total_a: number;
+  total_b: number;
+  delta: number;
+  delta_pct: number | null;
   by_category: Array<Record<string, unknown>>;
   by_merchant: Array<Record<string, unknown>>;
 };
+type TotalRow = { label: string; total: number; transaction_count: number; share: number };
 
 const TOP_SERIES = 8;
+const FOLD = "(everything else)";
 
-function isoDaysAgoMonths(monthsBack: number): string {
+function isoMonthsAgo(n: number): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - monthsBack, 1);
+  d.setMonth(d.getMonth() - n, 1);
   return d.toISOString().slice(0, 10);
 }
 
 export default function SpendingPage() {
   const router = useRouter();
-  const [monthsBack, setMonthsBack] = useState(6);
+  const [monthsBack, setMonthsBack] = useState<"3" | "6" | "12">("6");
   const [groupBy, setGroupBy] = useState<"category" | "merchant">("category");
   const [periodA, setPeriodA] = useState("");
   const [periodB, setPeriodB] = useState("");
   const [comparePair, setComparePair] = useState<{ a: string; b: string } | null>(null);
 
-  const start_date = isoDaysAgoMonths(monthsBack);
+  const start_date = isoMonthsAgo(Number(monthsBack));
   const end_date = new Date().toISOString().slice(0, 10);
 
-  const monthly = useTool<Agg>("aggregate_spending",
-    { start_date, end_date, group_by: "category", monthly: true });
-  const totals = useTool<Agg>("aggregate_spending",
-    { start_date, end_date, group_by: groupBy, monthly: false });
-  const compare = useTool<Compare>(comparePair ? "compare_periods" : "",
-    comparePair ? { period_a: comparePair.a, period_b: comparePair.b } : {});
+  const monthly = useTool<Agg>("aggregate_spending", { start_date, end_date, group_by: "category", monthly: true });
+  const totals = useTool<Agg>("aggregate_spending", { start_date, end_date, group_by: groupBy, monthly: false });
+  const compare = useTool<Compare>(comparePair ? "compare_periods" : "", comparePair ? { period_a: comparePair.a, period_b: comparePair.b } : {});
 
-  // Pivot monthly category rows into one object per month, keeping the top
-  // categories as series and folding the tail into one bucket. The bucket name
-  // must not collide with a real category (Plaid has a literal "OTHER").
-  const FOLD = "(everything else)";
   const { chartData, series } = useMemo(() => {
     const rows = monthly.data?.rows ?? [];
     const catTotals = new Map<string, number>();
@@ -66,112 +66,160 @@ export default function SpendingPage() {
   }, [monthly.data]);
 
   const grand = totals.data?.grand_total ?? 0;
-  const btn = (active: boolean) =>
-    `rounded-lg px-3 py-1.5 text-sm font-semibold ${active ? "bg-accent text-white" : "border border-line"}`;
+  const totalRows = useMemo<TotalRow[]>(
+    () =>
+      (totals.data?.rows ?? [])
+        .map((r) => ({
+          label: groupBy === "category" ? r.category! : r.merchant!,
+          total: r.total,
+          transaction_count: r.transaction_count,
+          share: grand ? (r.total / grand) * 100 : 0,
+        }))
+        .sort((a, b) => b.total - a.total),
+    [totals.data, groupBy, grand],
+  );
+
+  const topRow = totalRows[0];
+
+  const cols = useMemo<ColDef[]>(
+    () => [
+      { field: "label", headerName: groupBy === "category" ? "Category" : "Merchant", flex: 1.4, minWidth: 180, cellRenderer: (c: { value: string }) => <span className="font-medium capitalize text-txt">{String(c.value).replace(/_/g, " ").toLowerCase()}</span> },
+      { field: "share", headerName: "Share", flex: 1, minWidth: 140, sortable: false, filter: false, cellRenderer: makeBarCell("share") },
+      { field: "transaction_count", headerName: "Count", ...numCol(), width: 100, valueFormatter: (v) => `${v.value}×` },
+      { field: "total", headerName: "Total", ...numCol(), width: 130, valueFormatter: usdFormatter },
+      { field: "share", colId: "pct", headerName: "%", ...numCol(), width: 90, valueFormatter: (v) => `${Number(v.value).toFixed(1)}%` },
+    ],
+    [groupBy],
+  );
+
+  function drill(label: string) {
+    const key = groupBy === "category" ? "category" : "merchant";
+    router.push(`/transactions?${key}=${encodeURIComponent(label)}&start_date=${start_date}`);
+  }
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <h1 className="mb-1 text-xl font-bold">Spending</h1>
-      <p className="mb-6 text-sm text-mut">
-        Outflows only — transfers and loan payments excluded. Click a bar segment or row to see the transactions behind it.
-      </p>
+    <div className="space-y-4">
       <ErrorBanner error={monthly.error ?? totals.error} />
 
-      <Card title={`Monthly by category (${monthsBack} mo · total ${usd(monthly.data?.grand_total)})`}
+      {totals.data ? (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <KpiCard label={`Total spending · ${monthsBack}mo`} value={usd(grand)} icon={<IconSpending size={15} />} accent />
+          <KpiCard label={groupBy === "category" ? "Top category" : "Top merchant"} value={topRow ? <span className="capitalize">{topRow.label.replace(/_/g, " ").toLowerCase()}</span> : "—"} footnote={topRow ? `${usd(topRow.total)} · ${topRow.share.toFixed(0)}%` : undefined} />
+          <KpiCard label={groupBy === "category" ? "Categories" : "Merchants"} value={totalRows.length.toLocaleString()} />
+        </div>
+      ) : (
+        <SkeletonStats n={3} />
+      )}
+
+      <Card
+        title="Monthly by category"
+        subtitle="Outflows only — transfers & loan payments excluded. Click a segment to drill in."
         right={
-          <span className="flex gap-2">
-            {[3, 6, 12].map((m) => (
-              <button key={m} className={btn(monthsBack === m)} onClick={() => setMonthsBack(m)}>{m}m</button>
-            ))}
-          </span>
-        }>
+          <Segmented
+            value={monthsBack}
+            onChange={setMonthsBack}
+            options={[
+              { value: "3", label: "3M" },
+              { value: "6", label: "6M" },
+              { value: "12", label: "12M" },
+            ]}
+          />
+        }
+      >
         {monthly.data ? (
-          chartData.length
-            ? <StackedMonthlyBars data={chartData} series={series}
-                onBarClick={(cat) => cat !== FOLD &&
-                  router.push(`/transactions?category=${encodeURIComponent(cat)}&start_date=${start_date}`)} />
-            : <div className="text-mut">No spending in this window.</div>
-        ) : monthly.error ? null : <Loading />}
+          chartData.length ? (
+            <StackedMonthlyBars data={chartData} series={series} onBarClick={(cat) => cat !== FOLD && drill(cat)} />
+          ) : (
+            <EmptyState icon={<IconSpending size={20} />} title="No spending in this window" />
+          )
+        ) : monthly.error ? null : (
+          <Loading />
+        )}
       </Card>
 
-      <Card className="mt-4"
-        title={`Totals by ${groupBy}`}
-        right={
-          <span className="flex gap-2">
-            <button className={btn(groupBy === "category")} onClick={() => setGroupBy("category")}>Category</button>
-            <button className={btn(groupBy === "merchant")} onClick={() => setGroupBy("merchant")}>Merchant</button>
-          </span>
-        }>
-        {totals.data ? (
-          <table className="w-full text-sm">
-            <tbody>
-              {totals.data.rows.slice().sort((a, b) => b.total - a.total).map((r) => {
-                const label = groupBy === "category" ? r.category! : r.merchant!;
-                const share = grand ? (r.total / grand) * 100 : 0;
-                const href = groupBy === "category"
-                  ? `/transactions?category=${encodeURIComponent(label)}&start_date=${start_date}`
-                  : `/transactions?merchant=${encodeURIComponent(label)}&start_date=${start_date}`;
-                return (
-                  <tr key={label} className="cursor-pointer border-t border-line hover:bg-bg/50"
-                    onClick={() => router.push(href)}>
-                    <td className="py-2">{label}</td>
-                    <td className="w-1/3 py-2">
-                      <div className="h-2 overflow-hidden rounded-full bg-line">
-                        <div className="h-full bg-accent" style={{ width: `${share}%` }} />
-                      </div>
-                    </td>
-                    <td className="py-2 text-right text-mut">{r.transaction_count}×</td>
-                    <td className="py-2 text-right font-medium">{usd(r.total)}</td>
-                    <td className="py-2 text-right text-mut">{share.toFixed(1)}%</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : totals.error ? null : <Loading />}
-      </Card>
+      {totals.data ? (
+        <DataCard<TotalRow>
+          title={`Totals by ${groupBy}`}
+          icon={<IconSpending size={16} />}
+          rowData={totalRows}
+          columnDefs={cols}
+          getRowId={(p) => p.data.label}
+          onRowClicked={(e) => drill(e.data.label)}
+          countLabel={groupBy === "category" ? "categories" : "merchants"}
+          exportName={`spending-by-${groupBy}`}
+          pagination={totalRows.length > 50}
+          height={Math.min(560, 110 + totalRows.length * 44)}
+          actions={
+            <Segmented
+              size="sm"
+              value={groupBy}
+              onChange={setGroupBy}
+              options={[
+                { value: "category", label: "Category" },
+                { value: "merchant", label: "Merchant" },
+              ]}
+            />
+          }
+        />
+      ) : totals.error ? null : (
+        <Loading />
+      )}
 
-      <Card className="mt-4" title="Compare two months"
+      <Card
+        title="Compare two months"
         right={
-          <form className="flex gap-2"
-            onSubmit={(e) => { e.preventDefault(); if (periodA && periodB) setComparePair({ a: periodA, b: periodB }); }}>
-            <input type="month" className="rounded-md border border-line bg-bg px-2 py-1 text-sm"
-              value={periodA} onChange={(e) => setPeriodA(e.target.value)} />
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (periodA && periodB) setComparePair({ a: periodA, b: periodB });
+            }}
+          >
+            <input type="month" className={inputCls} value={periodA} onChange={(e) => setPeriodA(e.target.value)} />
             <span className="self-center text-mut">vs</span>
-            <input type="month" className="rounded-md border border-line bg-bg px-2 py-1 text-sm"
-              value={periodB} onChange={(e) => setPeriodB(e.target.value)} />
-            <button className="rounded-lg border border-line px-3 py-1 text-sm font-semibold">Compare</button>
+            <input type="month" className={inputCls} value={periodB} onChange={(e) => setPeriodB(e.target.value)} />
+            <Button type="submit" size="sm" variant="secondary">
+              Compare
+            </Button>
           </form>
-        }>
+        }
+      >
         {!comparePair ? (
           <div className="text-sm text-mut">Pick two months to diff category- and merchant-level spending.</div>
         ) : compare.data ? (
           <>
-            <div className="mb-3 text-sm">
-              {comparePair.a}: <b>{usd(compare.data.total_a)}</b> → {comparePair.b}: <b>{usd(compare.data.total_b)}</b>{" "}
-              <span className={compare.data.delta <= 0 ? "text-green" : "text-red"}>
-                ({compare.data.delta > 0 ? "+" : ""}{usd(compare.data.delta)}
-                {compare.data.delta_pct != null ? `, ${compare.data.delta_pct > 0 ? "+" : ""}${compare.data.delta_pct}%` : ""})
+            <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-mut">
+                {comparePair.a} <b className="nums text-txt">{usd(compare.data.total_a)}</b> → {comparePair.b} <b className="nums text-txt">{usd(compare.data.total_b)}</b>
               </span>
+              <Delta value={compare.data.delta} invert />
+              {compare.data.delta_pct != null && (
+                <span className={cx("nums text-[12px] font-medium", compare.data.delta > 0 ? "text-red" : "text-green")}>
+                  {compare.data.delta_pct > 0 ? "+" : ""}
+                  {compare.data.delta_pct.toFixed(1)}%
+                </span>
+              )}
             </div>
             <div className="grid gap-6 md:grid-cols-2">
-              {([["by_category", compare.data.by_category], ["by_merchant", compare.data.by_merchant]] as const)
-                .map(([title, rows]) => (
-                  <div key={title}>
-                    <div className="mb-1 text-xs uppercase tracking-wide text-mut">{title.replace("by_", "by ")}</div>
+              {([["By category", compare.data.by_category], ["By merchant", compare.data.by_merchant]] as const).map(([title, rows]) => (
+                <div key={title}>
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-mut">{title}</div>
+                  <div className="overflow-hidden rounded-[var(--radius)] border border-line">
                     <table className="w-full text-sm">
                       <tbody>
                         {rows.map((r, i) => {
                           const label = String(r.category ?? r.merchant ?? "—");
-                          const a = Number(r.a ?? r.total_a ?? 0), b = Number(r.b ?? r.total_b ?? 0);
+                          const a = Number(r.a ?? r.total_a ?? 0);
+                          const b = Number(r.b ?? r.total_b ?? 0);
                           const delta = Number(r.delta ?? b - a);
                           return (
-                            <tr key={i} className="border-t border-line">
-                              <td className="py-1.5">{label}</td>
-                              <td className="py-1.5 text-right text-mut">{usd(a)}</td>
-                              <td className="py-1.5 text-right text-mut">{usd(b)}</td>
-                              <td className={`py-1.5 text-right ${delta <= 0 ? "text-green" : "text-red"}`}>
-                                {delta > 0 ? "+" : ""}{usd(delta)}
+                            <tr key={i} className="border-t border-line first:border-0">
+                              <td className="px-3 py-2 capitalize">{label.replace(/_/g, " ").toLowerCase()}</td>
+                              <td className="nums px-3 py-2 text-right text-mut">{usd(a)}</td>
+                              <td className="nums px-3 py-2 text-right text-mut">{usd(b)}</td>
+                              <td className={`nums px-3 py-2 text-right font-medium ${delta <= 0 ? "text-green" : "text-red"}`}>
+                                {delta > 0 ? "+" : ""}
+                                {usd(delta)}
                               </td>
                             </tr>
                           );
@@ -179,10 +227,15 @@ export default function SpendingPage() {
                       </tbody>
                     </table>
                   </div>
-                ))}
+                </div>
+              ))}
             </div>
           </>
-        ) : compare.error ? <ErrorBanner error={compare.error} /> : <Loading />}
+        ) : compare.error ? (
+          <ErrorBanner error={compare.error} />
+        ) : (
+          <Loading />
+        )}
       </Card>
     </div>
   );
