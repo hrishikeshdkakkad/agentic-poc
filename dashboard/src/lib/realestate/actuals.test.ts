@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULTS, normalizeInputs, cloneInputs, type Inputs } from "./defaults";
 import { compute } from "./model";
 import { normalizeActualExpenses, blankActual, isBlankActual, meaningfulActualsCount, type ActualExpense } from "./actuals-defaults";
-import { actualsTotal, plannedVsActual, actualsForItem, actualsByStatus } from "./actuals";
+import { actualsTotal, plannedVsActual, actualsForItem, actualsByStatus, filterActuals } from "./actuals";
 import { copyConstructionBudget, type Store, type Deal } from "./deals";
 import { renameCategory, removeCategory, addCategoryLine } from "./construction";
 import { sumExpenses } from "./construction-defaults";
@@ -103,6 +103,25 @@ describe("blank-actual hygiene (no phantom ₹0 rows persisted or counted)", () 
     expect(
       meaningfulActualsCount([{ ...blankActual("X"), name: "Real", amount: 10_000 }, blankActual("X")]),
     ).toBe(1);
+  });
+});
+
+describe("filterActuals", () => {
+  const rows: ActualExpense[] = [
+    { id: "1", name: "a", amount: 1, date: "", status: "paid", category: "Electrical", createdAt: 0 },
+    { id: "2", name: "b", amount: 1, date: "", status: "pending", category: "Plumbing & sanitary", createdAt: 0 },
+    { id: "3", name: "c", amount: 1, date: "", status: "paid", createdAt: 0 }, // no category → Unassigned
+  ];
+  it("passes everything through on 'all'/empty", () => {
+    expect(filterActuals(rows, { category: "all", status: "all" })).toHaveLength(3);
+    expect(filterActuals(rows, {})).toHaveLength(3);
+  });
+  it("filters by category, treating missing category as Unassigned", () => {
+    expect(filterActuals(rows, { category: "Electrical" }).map((r) => r.id)).toEqual(["1"]);
+    expect(filterActuals(rows, { category: "Unassigned" }).map((r) => r.id)).toEqual(["3"]);
+  });
+  it("filters by status", () => {
+    expect(filterActuals(rows, { status: "pending" }).map((r) => r.id)).toEqual(["2"]);
   });
 });
 

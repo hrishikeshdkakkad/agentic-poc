@@ -55,3 +55,16 @@ export function plannedVsActual(i: Inputs): {
 /** Actuals logged against a specific budget line item. */
 export const actualsForItem = (i: Inputs, expenseId: string): ActualExpense[] =>
   (i.actualExpenses ?? []).filter((a) => a.expenseId === expenseId);
+
+/** Pre-filter the ledger by category and/or status before it reaches the grid.
+ * Free-text search is handled by the DataCard quick filter, not here. */
+export function filterActuals(
+  list: readonly ActualExpense[],
+  f: { category?: string; status?: ActualStatus | "all" },
+): ActualExpense[] {
+  return list.filter((x) => {
+    if (f.category && f.category !== "all" && (x.category || "Unassigned") !== f.category) return false;
+    if (f.status && f.status !== "all" && x.status !== f.status) return false;
+    return true;
+  });
+}
