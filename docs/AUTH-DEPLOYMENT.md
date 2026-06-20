@@ -32,7 +32,7 @@ RBAC is enforced **server-side in Next.js** (the only tier that holds the MCP be
 | Role (Cognito group) | Permissions | Sees |
 |---|---|---|
 | `admin` | `*` | everything, incl. raw SQL, sync, mutations |
-| `realestate-viewer` | `realestate:read` | only `/real-estate` (deal model); live portfolio strip hidden; cannot persist edits |
+| `realestate-viewer` | `realestate:read`, `realestate:write` | only `/real-estate`, as a shared **read-write** workspace: view the deal, edit assumptions, log construction actuals, pin baselines. Live portfolio strip still hidden; no access to any other page. |
 
 ### Invite someone
 
@@ -75,6 +75,6 @@ Env vars live in Vercel project settings (Production). To change one: `vercel en
 ## Verified posture (2026-06-19)
 
 - Unauthenticated: `/` → 307 `/login`; every `/api/*` → 401 JSON.
-- Authenticated `realestate-viewer` (live session): nav shows only Real estate; `GET /api/realestate/deals` → 200; `query_finances`, `get_portfolio_analysis`, `get_net_worth_history`, `sync_now`, `PUT /api/realestate/deals/*` → all **403**.
+- Authenticated `realestate-viewer` (live session): nav shows only Real estate; `GET` **and** `PUT /api/realestate/deals/*` → 200 (shared read-write workspace); cross-scope tools `query_finances`, `get_portfolio_analysis`, `get_net_worth_history`, `sync_now` → all **403**.
 - Cognito emits `cognito:groups` in the ID token; MCP Lambda accepts the deployed bearer (wrong token → 401).
 - 192 dashboard unit tests + 2 Python contract tests green; production build clean.
