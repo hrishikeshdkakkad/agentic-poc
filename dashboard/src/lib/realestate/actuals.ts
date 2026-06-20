@@ -1,11 +1,20 @@
 // Planned-vs-actual aggregations over a deal's logged real-world expenses.
 // Pure; the engine never reads these — they're a tracking layer over the budget.
 import type { Inputs } from "./defaults";
-import type { ActualExpense } from "./actuals-defaults";
+import type { ActualExpense, ActualStatus } from "./actuals-defaults";
 import { constructionByCategory } from "./construction";
 
 export const actualsTotal = (i: Inputs): number =>
   (i.actualExpenses ?? []).reduce((s, a) => s + (a.amount || 0), 0);
+
+export type ActualsStatusTotals = Record<ActualStatus, number>;
+
+/** Σ actual amounts grouped by settlement status (for the spend-log rollup). */
+export function actualsByStatus(list: readonly ActualExpense[] | undefined): ActualsStatusTotals {
+  const t: ActualsStatusTotals = { paid: 0, pending: 0, partial: 0 };
+  for (const a of list ?? []) t[a.status] += a.amount || 0;
+  return t;
+}
 
 export type PvaRow = {
   category: string;
@@ -46,3 +55,16 @@ export function plannedVsActual(i: Inputs): {
 /** Actuals logged against a specific budget line item. */
 export const actualsForItem = (i: Inputs, expenseId: string): ActualExpense[] =>
   (i.actualExpenses ?? []).filter((a) => a.expenseId === expenseId);
+
+/** Pre-filter the ledger by category and/or status before it reaches the grid.
+ * Free-text search is handled by the DataCard quick filter, not here. */
+export function filterActuals(
+  list: readonly ActualExpense[],
+  f: { category?: string; status?: ActualStatus | "all" },
+): ActualExpense[] {
+  return list.filter((x) => {
+    if (f.category && f.category !== "all" && (x.category || "Unassigned") !== f.category) return false;
+    if (f.status && f.status !== "all" && x.status !== f.status) return false;
+    return true;
+  });
+}

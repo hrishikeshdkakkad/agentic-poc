@@ -6,6 +6,7 @@ import { compute, marketUnits, prebuyRevenue, Strategy } from "@/lib/realestate/
 import { cr, rate } from "@/lib/realestate/format";
 import { constructionPerSqft, constructionTotal } from "@/lib/realestate/construction";
 import { forecastInputs } from "@/lib/realestate/forecast";
+import { meaningfulActualsCount } from "@/lib/realestate/actuals-defaults";
 import { costTrace, revenueTrace, netProfitTrace, irrTrace } from "@/lib/realestate/trace";
 import { useDealsStore } from "@/lib/realestate/use-deals-store";
 import { DealSwitcher } from "@/components/realestate/deal-switcher";
@@ -19,7 +20,7 @@ import { FinancingCard } from "@/components/realestate/financing-card";
 import { InputPanel } from "@/components/realestate/input-panel";
 import { ConstructionPanel } from "@/components/realestate/construction-panel";
 import { ConstructionEditor } from "@/components/realestate/construction-editor";
-import { ForecastPanel } from "@/components/realestate/forecast-panel";
+import { SpendLog } from "@/components/realestate/spend-log";
 import { BaselineBar } from "@/components/realestate/baseline-bar";
 import { TraceTree } from "@/components/realestate/provenance-tree";
 import { Badge, Button, Card, Drawer, NumberInput, SectionLabel, Segmented, cx, inputCls } from "@/components/ui";
@@ -31,6 +32,7 @@ export default function RealEstatePage() {
   const { store, current, hydrated, status, actions } = useDealsStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [budgetOpen, setBudgetOpen] = useState(false);
+  const [spendOpen, setSpendOpen] = useState(false);
   const [budgetOrigin, setBudgetOrigin] = useState<{ x: number; y: number } | null>(null);
   const [basis, setBasis] = useState<Basis>("plan");
   const openBudget = (origin: { x: number; y: number }) => {
@@ -39,6 +41,7 @@ export default function RealEstatePage() {
   };
 
   const { inputs, strategy, usdRate } = current;
+  const actualsCount = meaningfulActualsCount(inputs.actualExpenses ?? []);
   const inputIssues = useMemo(() => validateInputs(inputs), [inputs]);
   // The analytical panels render on the active basis: the plan inputs, or a
   // forecast budget rebuilt from actuals (committed). Editors always mutate the
@@ -101,6 +104,9 @@ export default function RealEstatePage() {
               className={cx(inputCls, "w-20 text-right")}
             />
           </label>
+          <Button variant="secondary" onClick={() => setSpendOpen(true)}>
+            Spend log{actualsCount ? ` (${actualsCount})` : ""}
+          </Button>
           <Button variant="primary" onClick={() => setDrawerOpen(true)}>
             Edit assumptions
             <IconChevronRight size={15} />
@@ -171,8 +177,6 @@ export default function RealEstatePage() {
             <CashFlowChart result={result} usdRate={usdRate} />
           </div>
           <FinancingCard inputs={viewInputs} />
-
-          <ForecastPanel inputs={inputs} />
 
           <SectionLabel note="where the build money goes">Construction budget</SectionLabel>
           <ConstructionPanel inputs={inputs} onEdit={openBudget} />
@@ -246,6 +250,21 @@ export default function RealEstatePage() {
           deals={store.deals}
           currentId={store.currentId}
           onCopyBudgetTo={(ids) => actions.copyBudgetTo(ids)}
+        />
+      </Drawer>
+
+      <Drawer
+        open={spendOpen}
+        onClose={() => setSpendOpen(false)}
+        title="Spend log"
+        subtitle={current.name}
+        width="min(72rem, 95vw)"
+        variant="sheet"
+      >
+        <SpendLog
+          inputs={inputs}
+          onChange={onInputChange}
+          saveSlot={<SaveStatus status={status} hydrated={hydrated} onRetry={() => actions.retry()} />}
         />
       </Drawer>
     </div>

@@ -2,10 +2,12 @@
 // and runs the SAME honest engine on it, so the page can show "where profit
 // actually lands" beside the plan — with zero engine duplication.
 //
-// EAC per budget line = max(budgeted, committed-so-far): you can't un-spend, so
-// an overspent line forecasts at its committed total; an untouched line forecasts
-// at budget. Actuals not tied to a live budget line (orphans / unbudgeted) are
-// appended as their own forecast lines. The forecast Inputs is EPHEMERAL — build
+// Actuals join to the budget by CATEGORY — the only link the editor sets — so the
+// forecast can never disagree with the "spent vs budget" rollup (which buckets the
+// same way). A category's EAC = max(its budget, its committed-so-far): you can't
+// un-spend, so an overspent category forecasts at its committed total; an under-
+// or untouched category forecasts at budget. Actuals whose category has no budget
+// line are "unbudgeted" and append on top. The forecast Inputs is EPHEMERAL — build
 // it, compute, discard. It must NEVER be persisted (its synthetic lines would
 // otherwise become permanent budget).
 
@@ -13,6 +15,7 @@ import { type Inputs } from "./defaults";
 import { computeReality, type Reality } from "./reality";
 import type { ActualExpense } from "./actuals-defaults";
 import type { ConstructionExpense } from "./construction-defaults";
+import { constructionByCategory } from "./construction";
 
 export type ForecastBasis = "committed" | "paid";
 
@@ -23,57 +26,55 @@ export type ForecastBasis = "committed" | "paid";
 const counts = (a: ActualExpense, basis: ForecastBasis) =>
   basis === "paid" ? a.status === "paid" || a.status === "partial" : true;
 
-/** Σ committed actuals per LIVE budget line id (orphans excluded). */
-function committedByLine(i: Inputs, basis: ForecastBasis): Map<string, number> {
-  const live = new Set((i.constructionExpenses ?? []).map((e) => e.id));
+// Actuals with no category bucket here, matching plannedVsActual's fallback so the
+// forecast and the rollup label unbudgeted spend identically.
+const UNASSIGNED = "Unassigned";
+
+/** Σ counted actuals per category (same bucketing as plannedVsActual). */
+function committedByCategory(i: Inputs, basis: ForecastBasis): Map<string, number> {
   const m = new Map<string, number>();
   for (const a of i.actualExpenses ?? []) {
-    if (!counts(a, basis) || !a.expenseId || !live.has(a.expenseId)) continue;
-    m.set(a.expenseId, (m.get(a.expenseId) ?? 0) + (a.amount || 0));
+    if (!counts(a, basis)) continue;
+    const cat = a.category || UNASSIGNED;
+    m.set(cat, (m.get(cat) ?? 0) + (a.amount || 0));
   }
   return m;
 }
 
-/** Actuals with no expenseId, or whose expenseId points at a deleted line. */
-function orphanActuals(i: Inputs, basis: ForecastBasis): ActualExpense[] {
-  const live = new Set((i.constructionExpenses ?? []).map((e) => e.id));
-  return (i.actualExpenses ?? []).filter(
-    (a) => counts(a, basis) && (!a.expenseId || !live.has(a.expenseId)),
-  );
-}
-
-/** Orphan/unbudgeted actuals collapsed into one synthetic budget line per category. */
-function syntheticLines(i: Inputs, basis: ForecastBasis): ConstructionExpense[] {
-  const byCat = new Map<string, number>();
-  for (const a of orphanActuals(i, basis)) {
-    const cat = a.category || "Unbudgeted";
-    byCat.set(cat, (byCat.get(cat) ?? 0) + (a.amount || 0));
-  }
-  return [...byCat.entries()].map(([category, amount]) => ({
-    id: `fc-unbudgeted:${category}`,
-    category,
-    item: "Logged actuals (unbudgeted)",
-    qty: 1,
-    unit: "lumpsum",
-    rate: amount,
-    amount,
-    month: 24, // exit; month is irrelevant to the economics (only the total feeds buildSubtotal)
-  }));
+/** Budgeted ₹ per category, from the itemized construction budget. */
+function budgetByCategory(i: Inputs): Map<string, number> {
+  return new Map(constructionByCategory(i).map((c) => [c.category, c.amount]));
 }
 
 /**
  * Build an EPHEMERAL forecast Inputs whose construction budget encodes the EAC.
- * `actualExpenses` is stripped so nothing downstream double-counts. NEVER persist.
+ * Original budget lines are left intact; a synthetic line tops up any category
+ * that has committed past its budget (an "overspend" for budgeted categories, an
+ * "unbudgeted" line for categories with no budget). `actualExpenses` is stripped
+ * so nothing downstream double-counts. NEVER persist.
  */
 export function forecastInputs(i: Inputs, basis: ForecastBasis = "committed"): Inputs {
-  const committed = committedByLine(i, basis);
-  const forecastLines = (i.constructionExpenses ?? []).map((e) => ({
-    ...e,
-    amount: Math.max(e.amount, committed.get(e.id) ?? 0),
-  }));
+  const committed = committedByCategory(i, basis);
+  const budget = budgetByCategory(i);
+  const synthetic: ConstructionExpense[] = [];
+  for (const [category, com] of committed) {
+    const over = com - (budget.get(category) ?? 0);
+    if (over <= 0) continue; // under/on budget → the existing budget lines already cover it
+    const unbudgeted = !budget.has(category);
+    synthetic.push({
+      id: `fc-${unbudgeted ? "unbudgeted" : "overspend"}:${category}`,
+      category,
+      item: unbudgeted ? "Logged actuals (unbudgeted)" : "Committed over budget",
+      qty: 1,
+      unit: "lumpsum",
+      rate: over,
+      amount: over,
+      month: 24, // exit; month is irrelevant to the economics (only the total feeds buildSubtotal)
+    });
+  }
   return {
     ...i,
-    constructionExpenses: [...forecastLines, ...syntheticLines(i, basis)],
+    constructionExpenses: [...(i.constructionExpenses ?? []), ...synthetic],
     actualExpenses: [],
   };
 }
@@ -85,38 +86,27 @@ export function forecast(i: Inputs, basis: ForecastBasis = "committed"): Reality
 }
 
 export type EacRow = {
-  id: string;
-  item: string;
   category: string;
-  budget: number; // 0 for unbudgeted lines
+  budget: number; // 0 for unbudgeted categories
   committed: number;
-  eac: number; // max(budget, committed) for budgeted lines; = committed for unbudgeted
+  eac: number; // max(budget, committed)
   unbudgeted: boolean;
 };
 
-/** Per-line plan-vs-forecast rows for the EAC grid (budgeted lines, then unbudgeted). */
-export function eacByLine(i: Inputs, basis: ForecastBasis = "committed"): EacRow[] {
-  const committed = committedByLine(i, basis);
-  const budgeted: EacRow[] = (i.constructionExpenses ?? []).map((e) => {
-    const c = committed.get(e.id) ?? 0;
-    return {
-      id: e.id,
-      item: e.item,
-      category: e.category,
-      budget: e.amount,
-      committed: c,
-      eac: Math.max(e.amount, c),
-      unbudgeted: false,
-    };
+/** Per-category plan-vs-forecast rows for the EAC grid (budget categories in
+ * canonical order, then unbudgeted ones). Σ eac == buildSubtotal(forecastInputs). */
+export function eacByCategory(i: Inputs, basis: ForecastBasis = "committed"): EacRow[] {
+  const committed = committedByCategory(i, basis);
+  const budgetCats = constructionByCategory(i);
+  const seen = new Set(budgetCats.map((c) => c.category));
+  const budgeted: EacRow[] = budgetCats.map((c) => {
+    const com = committed.get(c.category) ?? 0;
+    return { category: c.category, budget: c.amount, committed: com, eac: Math.max(c.amount, com), unbudgeted: false };
   });
-  const unbudgeted: EacRow[] = syntheticLines(i, basis).map((s) => ({
-    id: s.id,
-    item: s.item,
-    category: s.category,
-    budget: 0,
-    committed: s.amount,
-    eac: s.amount,
-    unbudgeted: true,
-  }));
+  const unbudgeted: EacRow[] = [];
+  for (const [category, com] of committed) {
+    if (seen.has(category)) continue;
+    unbudgeted.push({ category, budget: 0, committed: com, eac: com, unbudgeted: true });
+  }
   return [...budgeted, ...unbudgeted];
 }

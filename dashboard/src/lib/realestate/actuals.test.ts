@@ -3,8 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS, normalizeInputs, cloneInputs, type Inputs } from "./defaults";
 import { compute } from "./model";
-import { normalizeActualExpenses, blankActual } from "./actuals-defaults";
-import { actualsTotal, plannedVsActual, actualsForItem } from "./actuals";
+import { normalizeActualExpenses, blankActual, isBlankActual, meaningfulActualsCount, type ActualExpense } from "./actuals-defaults";
+import { actualsTotal, plannedVsActual, actualsForItem, actualsByStatus, filterActuals } from "./actuals";
 import { copyConstructionBudget, type Store, type Deal } from "./deals";
 import { renameCategory, removeCategory, addCategoryLine } from "./construction";
 import { sumExpenses } from "./construction-defaults";
@@ -69,6 +69,73 @@ describe("planned vs actual", () => {
     };
     expect(actualsForItem(withItem, "steel-found")).toHaveLength(1);
     expect(actualsForItem(withItem, "nope")).toHaveLength(0);
+  });
+});
+
+describe("blank-actual hygiene (no phantom ₹0 rows persisted or counted)", () => {
+  it("flags a freshly-added blank row as blank (only a default category, nothing entered)", () => {
+    expect(isBlankActual(blankActual("Preliminaries & site setup"))).toBe(true);
+    expect(isBlankActual(blankActual())).toBe(true);
+  });
+  it("treats any real content as non-blank — amount, name, vendor, date, ref, url, or notes", () => {
+    const base = blankActual("X");
+    expect(isBlankActual({ ...base, amount: 10_000 })).toBe(false);
+    expect(isBlankActual({ ...base, name: "Steel order 1" })).toBe(false);
+    expect(isBlankActual({ ...base, vendor: "HDFC Bank" })).toBe(false);
+    expect(isBlankActual({ ...base, date: "2026-06-19" })).toBe(false);
+    expect(isBlankActual({ ...base, reference: "INV-1" })).toBe(false);
+    expect(isBlankActual({ ...base, url: "http://x" })).toBe(false);
+    expect(isBlankActual({ ...base, description: "note" })).toBe(false);
+  });
+  it("normalizeActualExpenses prunes fully-blank rows but keeps real ones", () => {
+    const rows = normalizeActualExpenses([
+      { name: "", amount: 0, category: "Preliminaries & site setup", status: "paid" }, // phantom → drop
+      { name: "Loan processing fee", amount: 10_000, status: "paid" }, // keep
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("Loan processing fee");
+  });
+  it("keeps an amount-0 row that carries a name (a legitimately pending placeholder)", () => {
+    const rows = normalizeActualExpenses([{ name: "Awaiting invoice", amount: 0, status: "pending" }]);
+    expect(rows).toHaveLength(1);
+  });
+  it("meaningfulActualsCount ignores blank rows (drives the Actuals (N) badge)", () => {
+    expect(
+      meaningfulActualsCount([{ ...blankActual("X"), name: "Real", amount: 10_000 }, blankActual("X")]),
+    ).toBe(1);
+  });
+});
+
+describe("filterActuals", () => {
+  const rows: ActualExpense[] = [
+    { id: "1", name: "a", amount: 1, date: "", status: "paid", category: "Electrical", createdAt: 0 },
+    { id: "2", name: "b", amount: 1, date: "", status: "pending", category: "Plumbing & sanitary", createdAt: 0 },
+    { id: "3", name: "c", amount: 1, date: "", status: "paid", createdAt: 0 }, // no category → Unassigned
+  ];
+  it("passes everything through on 'all'/empty", () => {
+    expect(filterActuals(rows, { category: "all", status: "all" })).toHaveLength(3);
+    expect(filterActuals(rows, {})).toHaveLength(3);
+  });
+  it("filters by category, treating missing category as Unassigned", () => {
+    expect(filterActuals(rows, { category: "Electrical" }).map((r) => r.id)).toEqual(["1"]);
+    expect(filterActuals(rows, { category: "Unassigned" }).map((r) => r.id)).toEqual(["3"]);
+  });
+  it("filters by status", () => {
+    expect(filterActuals(rows, { status: "pending" }).map((r) => r.id)).toEqual(["2"]);
+  });
+});
+
+describe("actualsByStatus", () => {
+  const a = (status: ActualExpense["status"], amount: number, id: string): ActualExpense =>
+    ({ id, name: "x", amount, date: "", status, createdAt: 0 });
+  it("sums amounts per status", () => {
+    expect(
+      actualsByStatus([a("paid", 100, "1"), a("pending", 50, "2"), a("partial", 25, "3"), a("paid", 100, "4")]),
+    ).toEqual({ paid: 200, pending: 50, partial: 25 });
+  });
+  it("defaults to zeros for empty or undefined", () => {
+    expect(actualsByStatus([])).toEqual({ paid: 0, pending: 0, partial: 0 });
+    expect(actualsByStatus(undefined)).toEqual({ paid: 0, pending: 0, partial: 0 });
   });
 });
 

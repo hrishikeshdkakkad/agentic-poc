@@ -1,9 +1,9 @@
 "use client";
 
-// Construction-budget workspace (wide drawer): a Budget tab (category-grouped
-// line items with rename/add/delete categories + copy-to-other-deals) and an
-// Actuals tab (real-world expense tracking). Edits flow up via onChange →
-// updateCurrent → the engine recomputes buildSubtotal from the itemized total.
+// Construction-budget workspace (wide drawer): category-grouped line items with
+// rename/add/delete categories + copy-to-other-deals. Pure planning — real spend
+// lives in the Spend log. Edits flow up via onChange → updateCurrent → the engine
+// recomputes buildSubtotal from the itemized total.
 
 import { useEffect, useMemo, useState } from "react";
 import type { Inputs } from "@/lib/realestate/defaults";
@@ -22,8 +22,7 @@ import {
   addCategoryLine,
 } from "@/lib/realestate/construction";
 import { cr, rate } from "@/lib/realestate/format";
-import { Badge, Button, NumberInput, Segmented, inputCls, cx } from "@/components/ui";
-import { ActualsEditor } from "@/components/realestate/actuals-editor";
+import { Badge, Button, NumberInput, inputCls, cx } from "@/components/ui";
 
 const CF_GRID = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 const UNITS = ["lumpsum", "sqft", "cum", "kg", "MT", "nos", "rmt", "point", "day", "month"];
@@ -41,32 +40,15 @@ export function ConstructionEditor({
   currentId: string;
   onCopyBudgetTo: (ids: string[]) => void;
 }) {
-  const [tab, setTab] = useState<"budget" | "actuals">("budget");
-  const actuals = inputs.actualExpenses?.length ?? 0;
-
+  // The construction drawer is now pure planning — real spend lives in the Spend log.
   return (
-    <div className="space-y-5">
-      <Segmented
-        layoutId="ce-tab"
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: "budget", label: "Budget" },
-          { value: "actuals", label: actuals ? `Actuals (${actuals})` : "Actuals" },
-        ]}
-      />
-      {tab === "budget" ? (
-        <BudgetTab
-          inputs={inputs}
-          onChange={onChange}
-          deals={deals}
-          currentId={currentId}
-          onCopyBudgetTo={onCopyBudgetTo}
-        />
-      ) : (
-        <ActualsEditor inputs={inputs} onChange={onChange} />
-      )}
-    </div>
+    <BudgetTab
+      inputs={inputs}
+      onChange={onChange}
+      deals={deals}
+      currentId={currentId}
+      onCopyBudgetTo={onCopyBudgetTo}
+    />
   );
 }
 

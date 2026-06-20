@@ -6,6 +6,15 @@ const finite = (n: number) => Number.isFinite(n);
 export const cr = (n: number) => (finite(n) ? `₹${(n / 1e7).toFixed(2)} Cr` : "—");
 export const lakh = (n: number) => (finite(n) ? `₹${(n / 1e5).toFixed(1)} L` : "—");
 export const pct = (n: number) => (finite(n) ? `${(n * 100).toFixed(1)}%` : "—");
+
+// Spent-share label that never hides real progress: a nonzero fraction below 1%
+// reads "<1%" instead of rounding down to a misleading "0%" (e.g. ₹10k of ₹2.03 Cr).
+export const pctSpent = (frac: number) => {
+  if (!finite(frac)) return "—";
+  const p = frac * 100;
+  if (p > 0 && p < 1) return "<1%";
+  return `${Math.round(p)}%`;
+};
 export const mult = (n: number) => (finite(n) ? `${n.toFixed(2)}×` : "—");
 export const inr = (n: number) => (finite(n) ? `₹${Math.round(n).toLocaleString("en-IN")}` : "—");
 export const rate = (n: number) => (finite(n) ? `₹${Math.round(n).toLocaleString("en-IN")}` : "—");

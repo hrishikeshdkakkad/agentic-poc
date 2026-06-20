@@ -12,8 +12,9 @@ import {
   constructionReconciliation,
   constructionTotal,
 } from "@/lib/realestate/construction";
-import { cr, rate } from "@/lib/realestate/format";
+import { cr, rate, pctSpent } from "@/lib/realestate/format";
 import { actualsTotal } from "@/lib/realestate/actuals";
+import { meaningfulActualsCount } from "@/lib/realestate/actuals-defaults";
 import { Badge, Button, Card } from "@/components/ui";
 
 export function ConstructionPanel({
@@ -29,7 +30,7 @@ export function ConstructionPanel({
   const recon = constructionReconciliation(inputs);
   const itemCount = inputs.constructionExpenses?.length ?? 0;
   const spent = actualsTotal(inputs);
-  const hasActuals = (inputs.actualExpenses?.length ?? 0) > 0;
+  const hasActuals = meaningfulActualsCount(inputs.actualExpenses ?? []) > 0;
   const maxCat = Math.max(1, ...cats.map((c) => c.amount));
   const maxPhase = Math.max(1, ...phases.map((p) => p.amount));
 
@@ -41,7 +42,7 @@ export function ConstructionPanel({
         <div className="flex items-center gap-2">
           {hasActuals && (
             <Badge tone={spent > total ? "red" : spent / total > 0.9 ? "amber" : "green"} dot>
-              {total > 0 ? ((spent / total) * 100).toFixed(0) : 0}% spent
+              {pctSpent(total > 0 ? spent / total : 0)} spent
             </Badge>
           )}
           <Badge tone={recon.matched ? "green" : "amber"} dot>
