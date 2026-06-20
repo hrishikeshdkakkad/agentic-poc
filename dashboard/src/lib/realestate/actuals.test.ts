@@ -3,8 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS, normalizeInputs, cloneInputs, type Inputs } from "./defaults";
 import { compute } from "./model";
-import { normalizeActualExpenses, blankActual, isBlankActual, meaningfulActualsCount } from "./actuals-defaults";
-import { actualsTotal, plannedVsActual, actualsForItem } from "./actuals";
+import { normalizeActualExpenses, blankActual, isBlankActual, meaningfulActualsCount, type ActualExpense } from "./actuals-defaults";
+import { actualsTotal, plannedVsActual, actualsForItem, actualsByStatus } from "./actuals";
 import { copyConstructionBudget, type Store, type Deal } from "./deals";
 import { renameCategory, removeCategory, addCategoryLine } from "./construction";
 import { sumExpenses } from "./construction-defaults";
@@ -103,6 +103,20 @@ describe("blank-actual hygiene (no phantom ₹0 rows persisted or counted)", () 
     expect(
       meaningfulActualsCount([{ ...blankActual("X"), name: "Real", amount: 10_000 }, blankActual("X")]),
     ).toBe(1);
+  });
+});
+
+describe("actualsByStatus", () => {
+  const a = (status: ActualExpense["status"], amount: number, id: string): ActualExpense =>
+    ({ id, name: "x", amount, date: "", status, createdAt: 0 });
+  it("sums amounts per status", () => {
+    expect(
+      actualsByStatus([a("paid", 100, "1"), a("pending", 50, "2"), a("partial", 25, "3"), a("paid", 100, "4")]),
+    ).toEqual({ paid: 200, pending: 50, partial: 25 });
+  });
+  it("defaults to zeros for empty or undefined", () => {
+    expect(actualsByStatus([])).toEqual({ paid: 0, pending: 0, partial: 0 });
+    expect(actualsByStatus(undefined)).toEqual({ paid: 0, pending: 0, partial: 0 });
   });
 });
 

@@ -1,11 +1,20 @@
 // Planned-vs-actual aggregations over a deal's logged real-world expenses.
 // Pure; the engine never reads these — they're a tracking layer over the budget.
 import type { Inputs } from "./defaults";
-import type { ActualExpense } from "./actuals-defaults";
+import type { ActualExpense, ActualStatus } from "./actuals-defaults";
 import { constructionByCategory } from "./construction";
 
 export const actualsTotal = (i: Inputs): number =>
   (i.actualExpenses ?? []).reduce((s, a) => s + (a.amount || 0), 0);
+
+export type ActualsStatusTotals = Record<ActualStatus, number>;
+
+/** Σ actual amounts grouped by settlement status (for the spend-log rollup). */
+export function actualsByStatus(list: readonly ActualExpense[] | undefined): ActualsStatusTotals {
+  const t: ActualsStatusTotals = { paid: 0, pending: 0, partial: 0 };
+  for (const a of list ?? []) t[a.status] += a.amount || 0;
+  return t;
+}
 
 export type PvaRow = {
   category: string;
