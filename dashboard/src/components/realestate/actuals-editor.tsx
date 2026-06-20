@@ -15,7 +15,7 @@ import {
 } from "@/lib/realestate/actuals-defaults";
 import { plannedVsActual } from "@/lib/realestate/actuals";
 import { constructionByCategory } from "@/lib/realestate/construction";
-import { cr } from "@/lib/realestate/format";
+import { compactInr, pctSpent } from "@/lib/realestate/format";
 import { Badge, Button, EmptyState, Field, inputCls, NumberInput, cx } from "@/components/ui";
 
 const STATUS_TONE: Record<ActualStatus, "green" | "amber" | "accent"> = {
@@ -198,11 +198,12 @@ function PvaRollup({ pva }: { pva: ReturnType<typeof plannedVsActual> }) {
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.09em] text-faint">Spent vs budget</div>
           <div className="nums mt-0.5 text-lg font-semibold text-txt">
-            {cr(pva.totalActual)} <span className="text-[12px] font-normal text-mut">of {cr(pva.totalBudget)}</span>
+            {compactInr(pva.totalActual)}{" "}
+            <span className="text-[12px] font-normal text-mut">of {compactInr(pva.totalBudget)}</span>
           </div>
         </div>
         <Badge tone={pva.totalActual > pva.totalBudget ? "red" : overallPct > 0.9 ? "amber" : "green"} dot>
-          {(overallPct * 100).toFixed(0)}% spent
+          {pctSpent(overallPct)} spent
         </Badge>
       </div>
       {rows.some((r) => r.actual > 0) && (
@@ -222,8 +223,8 @@ function PvaRollup({ pva }: { pva: ReturnType<typeof plannedVsActual> }) {
                 .map((r) => (
                   <tr key={r.category} className="border-t border-line">
                     <td className="px-3 py-1.5 text-txt">{r.category}</td>
-                    <td className="nums px-3 py-1.5 text-right text-mut">{cr(r.budgeted)}</td>
-                    <td className="nums px-3 py-1.5 text-right text-txt">{cr(r.actual)}</td>
+                    <td className="nums px-3 py-1.5 text-right text-mut">{compactInr(r.budgeted)}</td>
+                    <td className="nums px-3 py-1.5 text-right text-txt">{compactInr(r.actual)}</td>
                     <td
                       className={cx(
                         "nums px-3 py-1.5 text-right font-medium",
@@ -231,7 +232,7 @@ function PvaRollup({ pva }: { pva: ReturnType<typeof plannedVsActual> }) {
                       )}
                     >
                       {r.variance > 0 ? "+" : ""}
-                      {cr(r.variance)}
+                      {compactInr(r.variance)}
                     </td>
                   </tr>
                 ))}

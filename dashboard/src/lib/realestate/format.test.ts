@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compactInr, inrToUsd } from "./format";
+import { compactInr, inrToUsd, pctSpent } from "./format";
 
 describe("inrToUsd magnitude boundaries", () => {
   it("promotes to $M instead of rendering $1000K just under a million", () => {
@@ -25,5 +25,18 @@ describe("compactInr magnitude boundaries", () => {
     expect(compactInr(9_960_000)).toBe("₹1.0Cr");
     expect(compactInr(9_900_000)).toBe("₹99L"); // genuinely below the rounding boundary
     expect(compactInr(10_000_000)).toBe("₹1.0Cr");
+  });
+});
+
+describe("pctSpent label keeps tiny-but-real spend visible", () => {
+  it("shows <1% for a nonzero sub-1% fraction instead of a misleading 0%", () => {
+    expect(pctSpent(0)).toBe("0%"); // genuinely nothing spent
+    expect(pctSpent(10_000 / 20_300_000)).toBe("<1%"); // the ₹10k-of-₹2.03Cr case
+    expect(pctSpent(0.5)).toBe("50%");
+    expect(pctSpent(1)).toBe("100%");
+    expect(pctSpent(1.5)).toBe("150%");
+  });
+  it("guards non-finite input", () => {
+    expect(pctSpent(NaN)).toBe("—");
   });
 });

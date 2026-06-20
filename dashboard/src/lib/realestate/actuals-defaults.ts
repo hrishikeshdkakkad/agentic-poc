@@ -31,32 +31,62 @@ const finite = (v: unknown, fallback = 0, min = 0): number => {
   return Math.max(min, safe);
 };
 
+/**
+ * A row carrying no real logged spend — only the defaults the "+ Log an expense"
+ * button seeds (a category, status "paid", an id). Category/method/status are
+ * deliberately ignored: a real expense has at least an amount, a name, a vendor, a
+ * date, a reference, a receipt URL, a note, or an explicit budget-line link. Used
+ * to keep phantom ₹0 rows out of the DB (normalize) and out of the count badge.
+ */
+export function isBlankActual(a: Partial<ActualExpense>): boolean {
+  return (
+    !(typeof a.amount === "number" && a.amount > 0) &&
+    !str(a.name).trim() &&
+    !str(a.vendor).trim() &&
+    !str(a.date).trim() &&
+    !str(a.reference).trim() &&
+    !str(a.url).trim() &&
+    !str(a.description).trim() &&
+    !str(a.expenseId).trim()
+  );
+}
+
+/** How many actuals represent real logged spend — drives the "Actuals (N)" badge. */
+export const meaningfulActualsCount = (list: readonly Partial<ActualExpense>[]): number =>
+  list.reduce((n, a) => n + (isBlankActual(a) ? 0 : 1), 0);
+
 export function normalizeActualExpenses(raw: unknown): ActualExpense[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter(isRec).map((e, i) => {
-    const out: ActualExpense = {
-      id: str(e.id) || `act-${i}`,
-      name: str(e.name) || "Expense",
-      amount: finite(e.amount, 0, 0),
-      date: str(e.date),
-      status: (ACTUAL_STATUSES as readonly string[]).includes(str(e.status))
-        ? (str(e.status) as ActualStatus)
-        : "paid",
-      createdAt: typeof e.createdAt === "number" ? e.createdAt : Date.now(),
-    };
-    const opt = (k: "description" | "category" | "expenseId" | "vendor" | "method" | "reference" | "url", v: unknown) => {
-      const s = str(v);
-      if (s) out[k] = s;
-    };
-    opt("description", e.description);
-    opt("category", e.category);
-    opt("expenseId", e.expenseId);
-    opt("vendor", e.vendor);
-    opt("method", e.method);
-    opt("reference", e.reference);
-    opt("url", e.url);
-    return out;
-  });
+  return raw
+    .filter(isRec)
+    .map((e, i) => {
+      const out: ActualExpense = {
+        id: str(e.id) || `act-${i}`,
+        name: str(e.name), // raw — the "Expense" display default is applied AFTER the blank filter
+        amount: finite(e.amount, 0, 0),
+        date: str(e.date),
+        status: (ACTUAL_STATUSES as readonly string[]).includes(str(e.status))
+          ? (str(e.status) as ActualStatus)
+          : "paid",
+        createdAt: typeof e.createdAt === "number" ? e.createdAt : Date.now(),
+      };
+      const opt = (k: "description" | "category" | "expenseId" | "vendor" | "method" | "reference" | "url", v: unknown) => {
+        const s = str(v);
+        if (s) out[k] = s;
+      };
+      opt("description", e.description);
+      opt("category", e.category);
+      opt("expenseId", e.expenseId);
+      opt("vendor", e.vendor);
+      opt("method", e.method);
+      opt("reference", e.reference);
+      opt("url", e.url);
+      return out;
+    })
+    // Drop fully-blank rows (an abandoned "+ Log an expense" click) so they never
+    // persist as phantom ₹0 actuals; then restore the friendly display name default.
+    .filter((a) => !isBlankActual(a))
+    .map((a) => (a.name ? a : { ...a, name: "Expense" }));
 }
 
 export function blankActual(category?: string, expenseId?: string): ActualExpense {

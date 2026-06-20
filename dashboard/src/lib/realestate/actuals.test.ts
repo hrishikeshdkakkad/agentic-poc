@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULTS, normalizeInputs, cloneInputs, type Inputs } from "./defaults";
 import { compute } from "./model";
-import { normalizeActualExpenses, blankActual } from "./actuals-defaults";
+import { normalizeActualExpenses, blankActual, isBlankActual, meaningfulActualsCount } from "./actuals-defaults";
 import { actualsTotal, plannedVsActual, actualsForItem } from "./actuals";
 import { copyConstructionBudget, type Store, type Deal } from "./deals";
 import { renameCategory, removeCategory, addCategoryLine } from "./construction";
@@ -69,6 +69,40 @@ describe("planned vs actual", () => {
     };
     expect(actualsForItem(withItem, "steel-found")).toHaveLength(1);
     expect(actualsForItem(withItem, "nope")).toHaveLength(0);
+  });
+});
+
+describe("blank-actual hygiene (no phantom ₹0 rows persisted or counted)", () => {
+  it("flags a freshly-added blank row as blank (only a default category, nothing entered)", () => {
+    expect(isBlankActual(blankActual("Preliminaries & site setup"))).toBe(true);
+    expect(isBlankActual(blankActual())).toBe(true);
+  });
+  it("treats any real content as non-blank — amount, name, vendor, date, ref, url, or notes", () => {
+    const base = blankActual("X");
+    expect(isBlankActual({ ...base, amount: 10_000 })).toBe(false);
+    expect(isBlankActual({ ...base, name: "Steel order 1" })).toBe(false);
+    expect(isBlankActual({ ...base, vendor: "HDFC Bank" })).toBe(false);
+    expect(isBlankActual({ ...base, date: "2026-06-19" })).toBe(false);
+    expect(isBlankActual({ ...base, reference: "INV-1" })).toBe(false);
+    expect(isBlankActual({ ...base, url: "http://x" })).toBe(false);
+    expect(isBlankActual({ ...base, description: "note" })).toBe(false);
+  });
+  it("normalizeActualExpenses prunes fully-blank rows but keeps real ones", () => {
+    const rows = normalizeActualExpenses([
+      { name: "", amount: 0, category: "Preliminaries & site setup", status: "paid" }, // phantom → drop
+      { name: "Loan processing fee", amount: 10_000, status: "paid" }, // keep
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("Loan processing fee");
+  });
+  it("keeps an amount-0 row that carries a name (a legitimately pending placeholder)", () => {
+    const rows = normalizeActualExpenses([{ name: "Awaiting invoice", amount: 0, status: "pending" }]);
+    expect(rows).toHaveLength(1);
+  });
+  it("meaningfulActualsCount ignores blank rows (drives the Actuals (N) badge)", () => {
+    expect(
+      meaningfulActualsCount([{ ...blankActual("X"), name: "Real", amount: 10_000 }, blankActual("X")]),
+    ).toBe(1);
   });
 });
 

@@ -12,6 +12,7 @@ import {
   CONSTRUCTION_CATEGORIES,
   type ConstructionExpense,
 } from "@/lib/realestate/construction-defaults";
+import { meaningfulActualsCount } from "@/lib/realestate/actuals-defaults";
 import {
   blankExpense,
   constructionPerSqft,
@@ -42,7 +43,9 @@ export function ConstructionEditor({
   onCopyBudgetTo: (ids: string[]) => void;
 }) {
   const [tab, setTab] = useState<"budget" | "actuals">("budget");
-  const actuals = inputs.actualExpenses?.length ?? 0;
+  // Count only real logged spend — an abandoned blank "+ Log an expense" row must
+  // not inflate the badge (it also never persists; see normalizeActualExpenses).
+  const actuals = meaningfulActualsCount(inputs.actualExpenses ?? []);
 
   return (
     <div className="space-y-5">
