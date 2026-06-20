@@ -80,7 +80,7 @@ export default function RealEstatePage() {
   return (
     <div className="space-y-5">
       {/* top bar: title + switcher (left) · USD rate + edit (right) */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
         <div className="min-w-0">
           <DealSwitcher
             deals={store.deals}
@@ -94,7 +94,9 @@ export default function RealEstatePage() {
           <p className="mt-1.5 px-2 text-[13px] text-mut">{subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* On mobile the controls wrap; the two actions share a full-width row as
+            evenly-split, tappable buttons. sm+ keeps the natural inline row. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <SaveStatus status={status} hydrated={hydrated} onRetry={() => actions.retry()} />
           <label className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-faint">
             ₹/$
@@ -104,13 +106,23 @@ export default function RealEstatePage() {
               className={cx(inputCls, "w-20 text-right")}
             />
           </label>
-          <Button variant="secondary" onClick={() => setSpendOpen(true)}>
-            Spend log{actualsCount ? ` (${actualsCount})` : ""}
-          </Button>
-          <Button variant="primary" onClick={() => setDrawerOpen(true)}>
-            Edit assumptions
-            <IconChevronRight size={15} />
-          </Button>
+          <div className="flex w-full gap-2 sm:w-auto sm:gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => setSpendOpen(true)}
+              className="flex-1 justify-center sm:flex-none"
+            >
+              Spend log{actualsCount ? ` (${actualsCount})` : ""}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => setDrawerOpen(true)}
+              className="flex-1 justify-center sm:flex-none"
+            >
+              Edit assumptions
+              <IconChevronRight size={15} />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -138,7 +150,11 @@ export default function RealEstatePage() {
             />
             {basis === "forecast" && (
               <Badge tone="amber" dot>
-                Forecast basis · actuals-to-date + remaining budget
+                {/* shorter label on phones — the full one is ~290px and can't wrap */}
+                <span className="sm:hidden">Actuals + remaining budget</span>
+                <span className="hidden sm:inline">
+                  Forecast basis · actuals-to-date + remaining budget
+                </span>
               </Badge>
             )}
           </div>

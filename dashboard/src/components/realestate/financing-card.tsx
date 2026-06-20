@@ -76,8 +76,8 @@ export function FinancingCard({ inputs }: { inputs: Inputs }) {
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-faint">
             Rate sensitivity — floating exposure
           </div>
-          <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line">
-            <table className="w-full text-[12.5px]">
+          <div className="overflow-x-auto rounded-[var(--radius-sm)] border border-line">
+            <table className="w-full min-w-[34rem] text-[12.5px]">
               <thead>
                 <tr className="bg-surface text-left text-mut">
                   <th className="px-3 py-2 font-medium">Loan rate</th>
