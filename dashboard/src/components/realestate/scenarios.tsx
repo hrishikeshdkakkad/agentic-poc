@@ -35,7 +35,10 @@ export function Scenarios({ inputs, usdRate }: { inputs: Inputs; usdRate: number
 
   return (
     <Card title="Scenarios" subtitle="net · after loan + partners repaid">
-      <table className="w-full text-[13px]">
+      {/* Bear/Base/Bull cells (e.g. "₹4.2 Cr · $145K") exceed a phone's width —
+          scroll the table horizontally rather than letting it break the card. */}
+      <div className="-mx-5 overflow-x-auto px-5">
+      <table className="w-full min-w-[24rem] text-[13px]">
         <thead>
           <tr className="text-left text-mut">
             <th className="pb-2 font-medium"></th>
@@ -66,6 +69,7 @@ export function Scenarios({ inputs, usdRate }: { inputs: Inputs; usdRate: number
           ))}
         </tbody>
       </table>
+      </div>
     </Card>
   );
 }

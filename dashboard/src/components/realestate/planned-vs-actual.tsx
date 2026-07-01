@@ -15,8 +15,8 @@ export function PlannedVsActual({ pva }: { pva: ReturnType<typeof plannedVsActua
         Planned vs actual (by category)
       </div>
       {rows.length ? (
-        <div className="overflow-hidden rounded-[var(--radius-sm)] border border-line">
-          <table className="w-full text-[12px]">
+        <div className="overflow-x-auto rounded-[var(--radius-sm)] border border-line">
+          <table className="w-full min-w-[22rem] text-[12px]">
             <thead>
               <tr className="bg-surface text-left text-mut">
                 <th className="px-3 py-1.5 font-medium">Category</th>

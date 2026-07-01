@@ -104,8 +104,8 @@ function BudgetTab({
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3 rounded-[var(--radius)] border border-line bg-card px-4 py-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[var(--radius)] border border-line bg-card px-4 py-3">
+        <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.09em] text-faint">Total build</div>
           <div className="nums text-lg font-semibold text-txt">
             {cr(constructionTotal(inputs))}{" "}

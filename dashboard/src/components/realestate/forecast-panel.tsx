@@ -78,8 +78,8 @@ export function ForecastPanel({ inputs }: { inputs: Inputs }) {
         Forecast vs plan
       </SectionLabel>
 
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-[12px] text-mut">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <p className="min-w-0 text-[12px] text-mut">
           Committed so far <span className="nums text-txt">{compactInr(committedTotal)}</span> · build EAC{" "}
           <span className="nums text-txt">{cr(fcBuild)}</span> vs plan{" "}
           <span className="nums text-txt">{cr(planBuild)}</span>

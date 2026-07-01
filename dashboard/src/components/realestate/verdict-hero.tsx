@@ -42,7 +42,7 @@ export function VerdictHero({
   const funded = result.gap <= 0;
 
   return (
-    <section className="relative overflow-hidden rounded-[var(--radius-lg)] border border-line-strong bg-card p-6 shadow-[var(--shadow-sm)]">
+    <section className="relative overflow-hidden rounded-[var(--radius-lg)] border border-line-strong bg-card p-5 shadow-[var(--shadow-sm)] sm:p-6">
       <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-[var(--accent-soft)] blur-3xl" />
 
       <div className="relative flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -52,10 +52,10 @@ export function VerdictHero({
             Base return <span className="text-mut">· after loan &amp; partners repaid</span>
           </div>
           <div className="nums mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="text-[40px] font-semibold leading-none tracking-tight text-txt">
+            <span className="text-[32px] font-semibold leading-none tracking-tight text-txt sm:text-[40px]">
               {cr(r.dilution.profit)}
             </span>
-            <span className="text-[24px] font-semibold leading-none tracking-tight text-accent">
+            <span className="text-[20px] font-semibold leading-none tracking-tight text-accent sm:text-[24px]">
               {mult(r.dilution.roe)}
             </span>
             <span className="text-[13px] text-faint">· {inrToUsd(r.dilution.profit, usdRate)}</span>
@@ -63,7 +63,7 @@ export function VerdictHero({
         </div>
 
         {/* funding status */}
-        <div className="flex shrink-0 items-center gap-3 lg:flex-col lg:items-end lg:gap-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 lg:flex-col lg:items-end">
           <Badge tone={funded ? "green" : "amber"} dot>
             {funded ? "Fully funded" : `Gap ${cr(result.gap)} · ${inrToUsd(result.gap, usdRate)}`}
           </Badge>

@@ -123,7 +123,7 @@ export function Card({
       )}
     >
       {(title || right) && (
-        <header className="flex items-center justify-between gap-4 border-b border-line px-5 py-3.5">
+        <header className="flex flex-col gap-3 border-b border-line px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
             {icon && <span className="text-mut">{icon}</span>}
             <div className="min-w-0">
@@ -131,7 +131,9 @@ export function Card({
               {subtitle && <div className="truncate text-xs text-mut">{subtitle}</div>}
             </div>
           </div>
-          {right && <div className="shrink-0">{right}</div>}
+          {/* On mobile the header stacks (flex-col), so the actions get their own
+              full-width row below the title instead of crushing it; sm+ is unchanged. */}
+          {right && <div className="sm:shrink-0">{right}</div>}
         </header>
       )}
       <div className={cx(noPad ? "" : "p-5", bodyClassName)}>{children}</div>
@@ -637,7 +639,7 @@ export function Drawer({
         {open && (
           <>
             {scrim}
-            <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-4">
+            <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-2 sm:p-4">
               <motion.div
                 initial={{ opacity: 0, scale: 0.86, x: ox, y: oy }}
                 animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
@@ -650,7 +652,7 @@ export function Drawer({
                 className="pointer-events-auto flex max-h-[92vh] min-h-[80vh] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-line bg-surface shadow-[var(--shadow-lg)]"
               >
                 {head}
-                <div className="min-h-0 flex-1 overflow-y-auto p-6 sm:p-7">{children}</div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7">{children}</div>
               </motion.div>
             </div>
           </>
