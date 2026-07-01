@@ -172,11 +172,15 @@ def test_new_tools_registered():
 
 
 def test_describe_tables_reports_schema_and_notes(seeded_db):
+    # The dashboard's vitest integration suite (realestate/db.test.ts) shares
+    # this test database and self-creates its own table; drop it so the
+    # exact-set assertion below only governs storage.py-owned tables.
+    seeded_db.execute("DROP TABLE IF EXISTS real_estate_deals")
     out = analytics.describe_tables()
     assert set(out["tables"]) == {
         "accounts", "transactions", "balance_snapshots",
         "holdings_snapshots", "investment_transactions", "liabilities_snapshots",
-        "sync_state", "transaction_tags", "category_overrides",
+        "sync_state", "transaction_tags", "category_overrides", "news_editions",
     }
     inv = out["tables"]["investment_transactions"]
     assert inv["description"] and "investment" in inv["description"].lower()

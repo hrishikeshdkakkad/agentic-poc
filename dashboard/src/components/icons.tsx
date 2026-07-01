@@ -108,6 +108,15 @@ export const IconRealEstate = (p: P) => (
   </Svg>
 );
 
+export const IconNews = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 4h13a1 1 0 0 1 1 1v13.5" />
+    <path d="M18 18.5a1.5 1.5 0 0 0 3 0V8h-3" />
+    <path d="M4 4v14.5A1.5 1.5 0 0 0 5.5 20H19" />
+    <path d="M7 8h7M7 12h7M7 16h4" />
+  </Svg>
+);
+
 export const IconSearch = (p: P) => (
   <Svg {...p}>
     <circle cx="11" cy="11" r="7" />

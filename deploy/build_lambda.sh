@@ -34,7 +34,7 @@ mkdir -p "$BUILD"
 # sandbox_link.py must never ship; .env is excluded by construction.
 cp server.py plaid_client.py storage.py sync.py analytics.py \
    secure_tokens.py tagging.py gamify.py wealth.py insights.py \
-   planner.py config_secrets.py lambda_app.py "$BUILD/"
+   planner.py newsroom.py config_secrets.py lambda_app.py "$BUILD/"
 
 if [ -e "$BUILD/.env" ]; then
     echo "refusing to package .env" >&2

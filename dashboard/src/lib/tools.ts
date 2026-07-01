@@ -11,6 +11,9 @@ export const ALLOWED_TOOLS = new Set([
   "get_recurring_analysis", "get_merchant_profile", "compare_periods",
   "get_financial_health", "list_category_overrides", "get_optimizer_plan",
   "sync_now", "set_category_override", "set_manual_balance",
+  // Newsroom tools (scheduled cloud agent). Listed to satisfy the exact-set
+  // contract with server.py; TOOL_PERMISSION gates both behind admin.
+  "publish_news_edition", "get_latest_news_edition",
 ]);
 
 type RawResult = {

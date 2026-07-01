@@ -220,6 +220,17 @@ _TABLE_DOCS: dict[str, dict] = {
             "set_primary": "category_primary written onto matching transactions (NULL = leave)",
         },
     },
+    "news_editions": {
+        "description": "Editions of 'Time', the scheduled newsroom agent's market "
+                       "briefing rendered on the dashboard's /news page. Content is a "
+                       "JSONB document (schema: docs/NEWSROOM.md). Not financial data — "
+                       "no joins to accounts/transactions.",
+        "columns": {
+            "slug": "Deterministic PK: edition_date + slot (e.g. 2026-07-01-evening)",
+            "slot": "'morning' | 'midday' | 'evening'",
+            "content": "Full edition document (masthead, lead, sections, warnings)",
+        },
+    },
     "balance_snapshots": {
         "description": "Dated balance per account, appended on every sync. "
                        "Source for net-worth-over-time.",

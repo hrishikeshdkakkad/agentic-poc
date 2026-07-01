@@ -6,6 +6,7 @@ import {
   IconDebt,
   IconInvestments,
   IconNetWorth,
+  IconNews,
   IconOverview,
   IconPlan,
   IconRealEstate,
@@ -21,6 +22,7 @@ export type NavItem = { href: string; label: string; group: string; icon: IconCm
  * finance app reads: what you spend, what you're worth, what you manage. */
 export const NAV: NavItem[] = [
   { href: "/", label: "Overview", group: "", icon: IconOverview, blurb: "Everything at a glance" },
+  { href: "/news", label: "Time", group: "", icon: IconNews, blurb: "Markets & chips briefing, 3× daily" },
 
   { href: "/transactions", label: "Transactions", group: "Money", icon: IconTransactions, blurb: "Filter, drill, correct" },
   { href: "/spending", label: "Spending", group: "Money", icon: IconSpending, blurb: "Where the money goes" },

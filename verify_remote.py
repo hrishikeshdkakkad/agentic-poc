@@ -4,7 +4,7 @@ Drives the REMOTE server through a real MCP client (fastmcp Client over
 streamable HTTP), exactly the way a Claude agent will:
 
   1. auth gate: /health open; no token and wrong token both rejected
-  2. protocol: initialize, tools/list (expects all 31 tools)
+  2. protocol: initialize, tools/list (expects all 33 tools)
   3. every history/insight tool (answers from Postgres, zero Plaid calls)
   4. every live Plaid tool (proves Plaid creds + decrypted tokens work
      from the deployment)
@@ -90,6 +90,10 @@ TOOL_CHECKS: list[tuple[str, dict, object, str]] = [
      lambda p: "flags" in json.dumps(p) or "net_worth" in json.dumps(p), "health view"),
     ("list_category_overrides", {},
      lambda p: "overrides" in p, "override rulebook"),
+    # publish_news_edition is deliberately NOT smoke-tested: it would leave a
+    # probe edition on the live /news page. The read side proves the table.
+    ("get_latest_news_edition", {},
+     lambda p: "edition" in p, "newsroom read path"),
     # applied_to_transactions counts the WHOLE rulebook re-application (the
     # tool re-applies every override after adding one), so only ok+echo are
     # asserted; the rule itself matches nothing.
@@ -166,7 +170,7 @@ async def main() -> None:
     # -- protocol + every tool, one client session ---------------------------
     async with Client(transport) as client:
         tools = await client.list_tools()
-        check("protocol: tools/list returns all 31 tools", len(tools) == 31,
+        check("protocol: tools/list returns all 33 tools", len(tools) == 33,
               f"({len(tools)} tools)")
 
         for name, args, assertion, proves in TOOL_CHECKS:
