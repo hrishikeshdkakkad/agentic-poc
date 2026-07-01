@@ -20,6 +20,7 @@ from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 from plaid.model.transactions_recurring_get_request import TransactionsRecurringGetRequest
 
+import newsroom
 from plaid_client import (
     ItemHealth,
     all_items,
@@ -1126,6 +1127,59 @@ list_category_overrides = mcp.tool(
     annotations={"readOnlyHint": True, "title": "List Category Overrides"},
     name="list_category_overrides",
 )(_list_category_overrides_impl)
+
+
+def _publish_news_edition_impl(edition: dict) -> dict:
+    """Publish (or re-publish) one newsroom edition to the news_editions table.
+
+    For the scheduled "Time" newsroom agent (docs/NEWSROOM.md has the full
+    edition schema and editorial rules). The edition is validated structurally
+    first: malformed slot/date, a missing lead headline, or zero sections are
+    hard-rejected; recoverable gaps (an unsourced article, an empty section)
+    publish anyway and come back in warnings. Keyed on the deterministic slug
+    (edition_date + slot), so re-publishing the same slot upserts in place —
+    never duplicates. This is a content stream separate from transactions:
+    apply_tags()/apply_overrides() do not apply. Writes only to the user's own
+    Postgres history store, never to any institution.
+    """
+    try:
+        normalized, warnings = newsroom.validate_edition(edition)
+    except ValueError as e:
+        return {"edition": None,
+                "error": {"code": "INVALID_EDITION", "message": str(e)},
+                "warnings": []}
+    conn = storage.open_db()
+    try:
+        out = storage.record_news_edition(
+            conn, slug=normalized["slug"],
+            edition_date=normalized["edition_date"], slot=normalized["slot"],
+            title=normalized["title"], content=normalized["content"],
+        )
+    finally:
+        conn.close()
+    return {"edition": out, "warnings": warnings}
+
+
+publish_news_edition = mcp.tool(
+    annotations={"title": "Publish News Edition"},
+    name="publish_news_edition",
+)(_publish_news_edition_impl)
+
+
+def _get_latest_news_edition_impl() -> dict:
+    """Return the most recently published newsroom edition, or None.
+
+    Read-only. The scheduled agent calls this before writing so each edition
+    can carry continuity — advance stories that moved, drop what's unchanged,
+    note reversals — instead of re-reporting the previous run.
+    """
+    return {"edition": storage.get_latest_news_edition_row(), "warnings": []}
+
+
+get_latest_news_edition = mcp.tool(
+    annotations={"readOnlyHint": True, "title": "Latest News Edition"},
+    name="get_latest_news_edition",
+)(_get_latest_news_edition_impl)
 
 
 if __name__ == "__main__":

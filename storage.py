@@ -12,6 +12,7 @@ for outflows (spending) and negative for inflows.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, datetime, timezone
 
@@ -182,6 +183,28 @@ CREATE TABLE IF NOT EXISTS category_overrides (
     created_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (match_type, match_value)
 );
+
+-- Newsroom editions published by the scheduled research agent ("Time").
+-- A SEPARATE content stream, like investment_transactions: no merchant or
+-- category fields, so apply_tags()/apply_overrides() deliberately never touch
+-- it. Idempotency rides on the deterministic slug PK (edition_date + slot,
+-- e.g. '2026-07-01-evening'): re-running a routine upserts the content in
+-- place — content/title/updated_at refresh, published_at is preserved — so
+-- there are at most 3 rows per day, never duplicates. The dashboard renders
+-- this table by reading it directly over Postgres (dashboard/src/lib/news/),
+-- NOT through MCP; the publish/get MCP tools exist for the cloud agent.
+-- Edition content schema: docs/NEWSROOM.md (validated by newsroom.py).
+CREATE TABLE IF NOT EXISTS news_editions (
+    slug TEXT PRIMARY KEY,
+    edition_date DATE NOT NULL,
+    slot TEXT NOT NULL,              -- 'morning' | 'midday' | 'evening'
+    title TEXT,
+    content JSONB NOT NULL,
+    published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_news_editions_published
+    ON news_editions (published_at DESC);
 """
 
 _schema_ensured: set[str] = set()
@@ -807,3 +830,57 @@ def record_liabilities_snapshots(
             rows,
         )
     return len(rows)
+
+
+def record_news_edition(
+    conn: psycopg.Connection,
+    slug: str,
+    edition_date: str,
+    slot: str,
+    title: str | None,
+    content: dict,
+) -> dict:
+    """Upsert one newsroom edition (see the news_editions schema comment).
+
+    Keyed on the deterministic slug, so a re-run of the same scheduled slot
+    replaces the edition in place: content/title/updated_at refresh while
+    published_at keeps the original publication time. Callers validate first
+    via newsroom.validate_edition(); this function only persists.
+    """
+    row = conn.execute(
+        """
+        INSERT INTO news_editions (slug, edition_date, slot, title, content)
+        VALUES (%s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (slug) DO UPDATE SET
+            title = EXCLUDED.title,
+            content = EXCLUDED.content,
+            updated_at = now()
+        RETURNING slug, published_at
+        """,
+        (slug, edition_date, slot, title, json.dumps(content)),
+    ).fetchone()
+    return {"slug": row[0], "published_at": row[1].isoformat()}
+
+
+def get_latest_news_edition_row(db_url: str | None = None) -> dict | None:
+    """Most recently published edition, or None. Read-only path."""
+    conn = open_readonly(db_url)
+    try:
+        row = conn.execute(
+            """
+            SELECT slug, edition_date, slot, title, content, published_at
+            FROM news_editions ORDER BY published_at DESC LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return {
+        "slug": row[0],
+        "edition_date": row[1].isoformat(),
+        "slot": row[2],
+        "title": row[3],
+        "content": row[4],
+        "published_at": row[5].isoformat(),
+    }

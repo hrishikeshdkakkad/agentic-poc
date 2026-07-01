@@ -6,7 +6,8 @@ export type Permission =
   | "overview:read" | "transactions:read" | "spending:read" | "cashflow:read"
   | "accounts:read" | "networth:read" | "investments:read" | "debt:read"
   | "realestate:read" | "realestate:write" | "plan:read"
-  | "connections:manage" | "corrections:write" | "sync:run";
+  | "connections:manage" | "corrections:write" | "sync:run"
+  | "news:read";
 
 const WILDCARD = "*";
 
@@ -15,7 +16,9 @@ export const ROLE_PERMISSIONS: Record<string, (Permission | "*")[]> = {
   // /real-estate is a shared read-write workspace for viewers: they can read the
   // deal AND save edits/actuals, but page access (PAGE_PERMISSION keyed on
   // realestate:read) still confines them to /real-estate and no other scope.
-  "realestate-viewer": ["realestate:read", "realestate:write"],
+  // news:read is the "everyone" permission: /news is meant to be readable by
+  // every signed-in role, so grant it on each non-admin role added here.
+  "realestate-viewer": ["realestate:read", "realestate:write", "news:read"],
 };
 
 export const PAGE_PERMISSION: Record<string, Permission> = {
@@ -30,6 +33,7 @@ export const PAGE_PERMISSION: Record<string, Permission> = {
   "/real-estate": "realestate:read",
   "/plan": "plan:read",
   "/connections": "connections:manage",
+  "/news": "news:read",
 };
 
 // MCP tool → required permission. "admin" = wildcard required (raw SQL / dangerous).
@@ -52,6 +56,9 @@ export const TOOL_PERMISSION: Record<string, Permission | "admin"> = {
   sync_now: "sync:run",
   set_category_override: "corrections:write", set_manual_balance: "corrections:write",
   query_finances: "admin", describe_tables: "admin",
+  // Newsroom tools exist for the scheduled cloud agent (direct MCP); via the
+  // dashboard BFF they stay wildcard-gated — the page reads Postgres directly.
+  publish_news_edition: "admin", get_latest_news_edition: "admin",
 };
 
 export function permissionsForRoles(roles: string[]): Set<string> {

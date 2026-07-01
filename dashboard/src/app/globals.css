@@ -134,6 +134,9 @@
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  /* Newsroom faces (/news). font-headline = nameplate & heds, font-serif = body copy. */
+  --font-headline: var(--font-playfair), "Playfair Display", Georgia, serif;
+  --font-serif: var(--font-source-serif), Georgia, "Times New Roman", serif;
 }
 
 /* Let `dark:` utilities (if ever needed) follow our attribute, not the OS */
@@ -270,3 +273,34 @@ input[type="number"] {
 .ag-cell-pos { color: var(--green); }
 .ag-cell-neg { color: var(--red); }
 .ag-cell-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* ---------------------------------------------------------------- newsroom
+   Print details for /news that utilities can't express. Everything reads the
+   runtime theme tokens, so the page is NYT-white in light and "dark newsprint"
+   in dark without any forced colors. */
+.newsroom {
+  font-family: var(--font-serif);
+}
+/* Masthead rules: a heavy+hairline pair, like a broadsheet nameplate box. */
+.np-rule-double {
+  border-top: 1px solid var(--txt);
+  box-shadow: 0 3px 0 -2px var(--txt);
+  height: 4px;
+}
+.np-rule {
+  border-top: 1px solid var(--line-strong);
+}
+/* Column rules between newspaper columns. */
+.np-columns {
+  column-gap: 2.25rem;
+  column-rule: 1px solid var(--line);
+}
+/* Drop cap on the lede's first paragraph. */
+.np-dropcap > p:first-child::first-letter {
+  font-family: var(--font-headline);
+  font-weight: 700;
+  float: left;
+  font-size: 3.1em;
+  line-height: 0.85;
+  padding: 0.04em 0.12em 0 0;
+}

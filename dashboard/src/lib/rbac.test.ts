@@ -15,23 +15,34 @@ describe("rbac", () => {
     expect(canAccessPage(admin, "/transactions")).toBe(true);
   });
 
-  it("realestate-viewer is scoped to real estate only", () => {
+  it("realestate-viewer is scoped to real estate + the shared news page", () => {
     expect(isAdmin(viewer)).toBe(false);
     expect(can(viewer, "realestate:read")).toBe(true);
     expect(canAccessPage(viewer, "/real-estate")).toBe(true);
     expect(canAccessPage(viewer, "/transactions")).toBe(false);
     expect(canAccessPage(viewer, "/")).toBe(false);
-    expect(allowedPages(viewer)).toEqual(["/real-estate"]);
+    expect(allowedPages(viewer)).toEqual(["/real-estate", "/news"]);
   });
 
   it("realestate-viewer can read AND write the deal (shared workspace), nothing else", () => {
     expect(can(viewer, "realestate:read")).toBe(true);
     expect(can(viewer, "realestate:write")).toBe(true);
     // write does not widen page access or leak other scopes
-    expect(allowedPages(viewer)).toEqual(["/real-estate"]);
+    expect(allowedPages(viewer)).toEqual(["/real-estate", "/news"]);
     expect(can(viewer, "networth:read")).toBe(false);
     expect(can(viewer, "transactions:read")).toBe(false);
     expect(can(viewer, "connections:manage")).toBe(false);
+  });
+
+  it("/news is readable by every signed-in role, publish stays admin-only", () => {
+    expect(canAccessPage(viewer, "/news")).toBe(true);
+    expect(canAccessPage(admin, "/news")).toBe(true);
+    expect(canAccessPage(none, "/news")).toBe(false);
+    // The newsroom MCP tools exist for the scheduled cloud agent; through the
+    // dashboard BFF they are wildcard-gated like raw SQL.
+    expect(canUseTool(viewer, "publish_news_edition")).toBe(false);
+    expect(canUseTool(viewer, "get_latest_news_edition")).toBe(false);
+    expect(canUseTool(admin, "publish_news_edition")).toBe(true);
   });
 
   it("viewer cannot reach the real-estate context strip's tools", () => {
