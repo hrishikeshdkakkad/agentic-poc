@@ -113,6 +113,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === "/login" || pathname === "/403") {
     return <>{children}</>;
   }
+  // Dev-only newsroom harness renders bare: it is unauthenticated, so the
+  // shell would show an empty nav rail (the page itself 404s in production).
+  if (pathname === "/news-preview") {
+    return <main className="min-h-screen px-5 py-6 md:px-10 lg:px-14">{children}</main>;
+  }
 
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 

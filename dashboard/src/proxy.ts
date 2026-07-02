@@ -16,6 +16,9 @@ export default auth((req) => {
   if (pathname.startsWith("/api/auth") || pathname === "/login" || pathname === "/403") {
     return;
   }
+  // Dev-only newsroom harness (no Cognito env on localhost). In production
+  // this exemption is off AND the page itself hard-404s (defense in depth).
+  if (process.env.NODE_ENV !== "production" && pathname === "/news-preview") return;
 
   // API routes self-enforce (layer 2): they return JSON 401/403 themselves.
   // Pass them through so we never redirect an API call to the HTML login page.
