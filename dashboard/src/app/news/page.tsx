@@ -31,8 +31,8 @@ export default async function NewsPage({
   if (!edition) {
     return (
       <div className="newsroom mx-auto max-w-3xl py-16 text-center">
-        <h1 className="font-headline text-6xl font-black tracking-tight">Time</h1>
-        <p className="mt-2 font-serif text-[13px] italic text-mut">
+        <h1 className="font-headline text-[clamp(4.25rem,7.5vw,7.5rem)] font-black leading-[0.95] tracking-[-0.015em]">Time</h1>
+        <p className="mt-3 font-serif text-[15px] italic tracking-wide text-mut">
           All the News That Moves the Market
         </p>
         <div className="np-rule-double mt-4" />
@@ -50,7 +50,7 @@ export default async function NewsPage({
   const { content } = edition;
 
   return (
-    <div className="newsroom mx-auto max-w-6xl">
+    <div className="newsroom mx-auto max-w-[82rem]">
       <Masthead edition={edition} editionNo={editionNo} />
       <LeadStory lead={content.lead} />
       {content.sections.map((s) => (
