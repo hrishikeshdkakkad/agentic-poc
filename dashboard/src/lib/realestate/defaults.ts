@@ -202,12 +202,16 @@ function normalizeTranches(raw: unknown): Tranche[] {
 function normalizeInvestors(raw: unknown): Investor[] {
   const rows = Array.isArray(raw) ? raw : DEFAULTS.investors;
   return rows.filter(isRecord).map((v, idx) => {
-    const fallback = DEFAULTS.investors[idx] ?? DEFAULTS.investors[0];
     const kind: InvestorKind = v.kind === "capital" ? "capital" : "unit";
+    // Kind-aware name default. (An index fallback into DEFAULTS.investors would
+    // resolve to the single SMV seed for EVERY index, renaming any blank-named
+    // investor — even a capital partner — "Manoj".)
     const name =
       typeof v.name === "string" && v.name.trim()
         ? v.name.trim()
-        : fallback?.name ?? (kind === "capital" ? "Capital partner" : "Unit buyer");
+        : kind === "capital"
+          ? "Capital partner"
+          : "Unit buyer";
     const base = {
       id: typeof v.id === "string" && v.id ? v.id : `${kind}-${idx + 1}`,
       name,
@@ -215,16 +219,8 @@ function normalizeInvestors(raw: unknown): Investor[] {
       tranches: normalizeTranches(v.tranches),
     };
     return kind === "capital"
-      ? {
-          ...base,
-          kind,
-          returnPct: finiteRatio(v.returnPct, fallback?.returnPct ?? 0.18),
-        }
-      : {
-          ...base,
-          kind,
-          units: finiteNumber(v.units, fallback?.units ?? 1, 1, true),
-        };
+      ? { ...base, kind, returnPct: finiteRatio(v.returnPct, 0.18) }
+      : { ...base, kind, units: finiteNumber(v.units, 1, 1, true) };
   });
 }
 

@@ -148,6 +148,20 @@ describe("legacy deal migration", () => {
     expect(Number.isFinite(result.totalCost)).toBe(true);
   });
 
+  it("blank investor names default by KIND, never to the SMV seed's name", () => {
+    // The old per-index fallback resolved to DEFAULTS.investors[0] ("Manoj") for
+    // every index, renaming any blank-named investor — even a capital partner.
+    const normalized = normalizeInputs({
+      ...DEFAULTS,
+      investors: [
+        { id: "u", name: "  ", kind: "unit", units: 1, tranches: [{ amount: 1, month: 0 }] },
+        { id: "c", name: "", kind: "capital", returnPct: 0.2, tranches: [{ amount: 1, month: 0 }] },
+      ],
+    });
+    expect(normalized.investors[0].name).toBe("Unit buyer");
+    expect(normalized.investors[1].name).toBe("Capital partner");
+  });
+
   it("flags impossible unit-buyer mixes instead of computing silent nonsense", () => {
     const invalid: Inputs = {
       ...DEFAULTS,

@@ -74,7 +74,10 @@ export default function RealEstatePage() {
   const onUsdRate = (r: number) => actions.setUsdRate(r);
 
   const subtitle = result
-    ? `${inputs.units}-unit · ${result.builtUp.toLocaleString("en-IN")} sqft · build ${rate(constructionPerSqft(inputs))} · sale ${rate(inputs.baseSaleRate)} · breakeven ${rate(result.breakeven)}/sqft`
+    ? // build + breakeven both derive from viewInputs so the line stays on ONE
+      // basis — on Forecast, a plan-based build rate next to a forecast breakeven
+      // silently mixed bases.
+      `${inputs.units}-unit · ${result.builtUp.toLocaleString("en-IN")} sqft · build ${rate(constructionPerSqft(viewInputs))} · sale ${rate(inputs.baseSaleRate)} · breakeven ${rate(result.breakeven)}/sqft`
     : "fix assumptions to compute metrics";
 
   return (

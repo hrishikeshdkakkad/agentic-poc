@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULTS, DEFAULT_BRIDGE_PRICE, normalizeInputs, type Inputs } from "./defaults";
-import { dilutionScenario } from "./reality";
+import { computeReality, dilutionScenario } from "./reality";
 import { netScenario, netSensitivityGrid, netBreakdown } from "./reality";
 
 describe("net (after-debt) layer", () => {
@@ -61,6 +61,15 @@ describe("net (after-debt) layer", () => {
 
   it("net breakdown net profit equals the hero figure", () => {
     expect(netBreakdown(DEFAULTS).netProfit).toBe(dilutionScenario(DEFAULTS).profit);
+  });
+
+  it("net breakdown corrected IRR equals the hero's in BOTH repayment modes", () => {
+    // netBreakdown once used the bullet-only correctedAnnualIrr while the hero used
+    // correctedAnnualIrrByMode — under fullEMI the same page showed 62.6% vs 55.4%.
+    for (const repayment of ["interestOnly", "fullEMI"] as const) {
+      const i: Inputs = { ...DEFAULTS, repayment };
+      expect(netBreakdown(i).correctedIrr).toBe(computeReality(i).correctedIrr);
+    }
   });
 });
 

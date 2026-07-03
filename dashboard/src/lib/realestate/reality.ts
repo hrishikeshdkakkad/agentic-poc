@@ -89,7 +89,9 @@ export function unlevered(i: Inputs) {
   const revenue = marketUnits(i) * unitValue + prebuyRevenue(i);
   const profit = revenue - cost - capitalPartnerReturns(i);
   const totalReturn = cost > 0 ? profit / cost : NaN;
-  const years = Math.max(1, i.loanMonths) / 12;
+  // Annualize over the CF grid's fixed exit — revenue lands at M21/M24 no matter
+  // how long the loan runs, so loanMonths must not stretch/shrink the window.
+  const years = CF_MONTHS[CF_MONTHS.length - 1] / 12;
   return {
     profit,
     totalReturn,
@@ -266,7 +268,7 @@ export function netBreakdown(i: Inputs, bridgePrice = i.bridgePrice ?? DEFAULT_B
     loanRepaid: i.loanAmount,
     capitalPrincipal: capitalPrincipal(i),
     roe: i.equity > 0 ? netProfit / i.equity : NaN,
-    correctedIrr: correctedAnnualIrr(i, i.baseSaleRate),
+    correctedIrr: correctedAnnualIrrByMode(i, i.baseSaleRate),
   };
 }
 

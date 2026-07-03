@@ -6,7 +6,7 @@
 // inputs.repayment === "fullEMI" or for the rate-sensitivity scenarios).
 
 import { Inputs, CF_MONTHS } from "./defaults";
-import { netFlows, interestCarry } from "./model";
+import { netFlows, interestCarry, capitalPrincipal, capitalPartnerReturns } from "./model";
 
 const monthlyRate = (annual: number) => annual / 12;
 const tenureMonths = (i: Inputs) => Math.max(1, Math.round(i.loanTenureYears * 12));
@@ -119,7 +119,11 @@ function operatingFlows(i: Inputs, saleRate: number = i.baseSaleRate): number[] 
 }
 
 /** Full-EMI levered flows: net disbursement at M0, an EMI drag while the loan is
- * outstanding, and (when corrected) the principal still owed repaid at exit.
+ * outstanding, and (when corrected) every exit obligation repaid: the loan
+ * balance still owed PLUS capital-partner principal + agreed returns — the same
+ * obligations reality.ts correctedNetFlows repays on the bullet basis. (Their
+ * tranches arrive as inflows via netFlows, so omitting the repayment overstated
+ * the corrected IRR for any deal with a capital partner.)
  *
  * The EMI drag is prorated per quarter and capped at `loanMonths` (and never
  * beyond the M24 exit), so the EMIs paid + the balance repaid at exit retire the
@@ -137,6 +141,7 @@ export function emiNetFlows(
   // the 24-month horizon. The balloon repaid at exit is the balance at that point.
   const monthsPaid = Math.min(i.loanMonths, EXIT);
   const balance = amortizeThrough(i.loanAmount, i.loanRate, tenureMonths(i), monthsPaid).balance;
+  const owedAtExit = balance + capitalPrincipal(i) + capitalPartnerReturns(i);
 
   return CF_MONTHS.map((m, idx) => {
     let cf = op[idx];
@@ -146,7 +151,7 @@ export function emiNetFlows(
     const emisThisStep =
       Math.min(m, i.loanMonths) - Math.min(CF_MONTHS[idx - 1] ?? 0, i.loanMonths);
     if (emisThisStep > 0) cf -= emisThisStep * emi;
-    if (m === EXIT && opts.corrected) cf -= balance; // repay what's still owed
+    if (m === EXIT && opts.corrected) cf -= owedAtExit; // repay what's still owed
     return cf;
   });
 }

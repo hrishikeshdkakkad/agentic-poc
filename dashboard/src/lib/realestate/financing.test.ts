@@ -98,4 +98,21 @@ describe("EMI-mode J-curve flows", () => {
     expect(ci[ci.length - 1]).toBeCloseTo(financingSummary(EMI).interestOverBuild, 0);
     for (let k = 1; k < ci.length; k++) expect(ci[k]).toBeGreaterThanOrEqual(ci[k - 1]);
   });
+
+  it("corrected repays capital partners too (principal + agreed return at exit)", () => {
+    // Their tranches arrive as inflows via netFlows; without the matching outflow
+    // the corrected IRR was overstated for any full-EMI deal with a capital partner.
+    const cap: Inputs = {
+      ...EMI,
+      investors: [
+        ...EMI.investors,
+        { id: "cp", name: "CP", kind: "capital", returnPct: 0.18, tranches: [{ amount: 5_000_000, month: 0 }] },
+      ],
+    };
+    const rep = sum(emiNetFlows(cap));
+    const cor = sum(emiNetFlows(cap, { corrected: true }));
+    const owed =
+      financingSummary(cap).balanceAtExit + 5_000_000 + 5_000_000 * 0.18 * (24 / 12);
+    expect(rep - cor).toBeCloseTo(owed, 0);
+  });
 });

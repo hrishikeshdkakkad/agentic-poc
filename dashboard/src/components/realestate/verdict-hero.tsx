@@ -38,7 +38,6 @@ export function VerdictHero({
   usdRate: number;
 }) {
   const r = computeReality(inputs);
-  const base = result.scenarios.base;
   const funded = result.gap <= 0;
 
   return (
@@ -76,8 +75,7 @@ export function VerdictHero({
 
       {/* secondary stat strip */}
       <div className="relative mt-6 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-line pt-5 sm:grid-cols-3">
-        <MiniStat label="Annual IRR" value={pct(r.correctedIrr)} sub="after loan repaid" />
-        <MiniStat label="Gross margin" value={pct(base.margin)} sub="of revenue" />
+        <MiniStat label="Net margin" value={pct(r.dilution.margin)} sub="of revenue" />
         <MiniStat
           label="Breakeven"
           value={`${rate(result.breakeven)}/sqft`}

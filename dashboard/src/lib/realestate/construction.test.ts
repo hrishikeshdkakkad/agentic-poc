@@ -85,6 +85,13 @@ describe("normalization & migration", () => {
     expect(sumExpenses(i.constructionExpenses)).toBe(20_520_000);
     expect(buildSubtotal(i)).toBe(20_520_000);
   });
+  it("an explicitly EMPTY budget stays empty (deleting every line must not resurrect the template)", () => {
+    expect(normalizeConstructionExpenses([], 20_520_000)).toEqual([]);
+    const i = normalizeInputs({ ...DEFAULTS, constructionExpenses: [] });
+    expect(i.constructionExpenses).toEqual([]);
+    // with no itemization the engine falls back to the coarse rates
+    expect(buildSubtotal(i)).toBe((DEFAULTS.constructionRate + DEFAULTS.extrasRate) * 7200);
+  });
   it("scaleExpensesTo hits the target exactly despite rounding", () => {
     const scaled = scaleExpensesTo(DEFAULT_CONSTRUCTION_EXPENSES, 12_345_678);
     expect(sumExpenses(scaled)).toBe(12_345_678);

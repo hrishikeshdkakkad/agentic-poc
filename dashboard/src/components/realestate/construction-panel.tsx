@@ -103,8 +103,9 @@ export function ConstructionPanel({
             ))}
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-faint">
-            Bars are ₹ lakh per build month. Each line item carries the month it lands on — the draw
-            schedule the loan funds and the J-curve reads.
+            Bars are ₹ lakh per build month, from each line item&apos;s dated month — an informational
+            schedule only. The cash-flow model spreads the build evenly across five draws (M6–M18),
+            so the J-curve doesn&apos;t move when a line item&apos;s month changes.
           </p>
         </div>
       </div>

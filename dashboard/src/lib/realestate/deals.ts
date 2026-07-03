@@ -86,8 +86,10 @@ export const INITIAL_STORE: Store = {
 };
 
 export function newId(): string {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID().slice(0, 8);
-  return Math.random().toString(36).slice(2, 10);
+  // Full UUID: the old 8-hex-char slice (32 bits) could collide, and the DB
+  // write is an upsert — a collision would silently overwrite another deal.
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function blankDeal(name: string): Deal {

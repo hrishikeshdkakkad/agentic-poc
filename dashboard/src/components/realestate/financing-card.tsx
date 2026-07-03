@@ -102,7 +102,9 @@ export function FinancingCard({ inputs }: { inputs: Inputs }) {
                       )}
                     </td>
                     <td className="nums px-3 py-2 text-right text-amber">{cr(r.interest)}</td>
-                    <td className="nums px-3 py-2 text-right text-red">−{cr(r.peak)}</td>
+                    <td className="nums px-3 py-2 text-right text-red">
+                      {r.peak > 0 ? `−${cr(r.peak)}` : "—"}
+                    </td>
                     <td
                       className={cx(
                         "nums px-3 py-2 text-right font-medium",

@@ -253,15 +253,18 @@ export function scaleExpensesTo(
 }
 
 /**
- * Coerce stored/edited construction expenses into valid engine inputs. A deal
- * with no items gets the comprehensive default template scaled to its coarse
- * build budget, so migrating an existing deal never shifts its economics.
+ * Coerce stored/edited construction expenses into valid engine inputs. Only a
+ * deal that has NO stored array (pre-itemization shape) gets the default
+ * template scaled to its coarse build budget, so migrating an existing deal
+ * never shifts its economics. A stored EMPTY array is an intentional edit (the
+ * user deleted every line) and must stay empty — buildSubtotal then falls back
+ * to the coarse rates — rather than silently resurrecting the ~114-item template.
  */
 export function normalizeConstructionExpenses(
   raw: unknown,
   coarseBuildSubtotal: number,
 ): ConstructionExpense[] {
-  if (Array.isArray(raw) && raw.length) {
+  if (Array.isArray(raw)) {
     return raw.filter(isRec).map((e, i) => {
       const out: ConstructionExpense = {
         id: typeof e.id === "string" && e.id ? e.id : `ce-${i}`,

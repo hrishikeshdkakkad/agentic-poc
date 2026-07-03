@@ -215,9 +215,17 @@ export function ProfitTimeline({ inputs, usdRate }: { inputs: Inputs; usdRate: n
 
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] text-faint">
         <span>
+          {/* peak === 0 means the position never dips below zero — "−₹0.00 Cr at M0"
+              would read as a real trough, so say what actually happened. */}
           Peak capital at risk{" "}
-          <span className="nums font-semibold text-red">−{cr(t.peakCapitalAtRisk)}</span>
-          {" "}at M{t.months[t.troughIndex]}
+          {t.peakCapitalAtRisk > 0 ? (
+            <>
+              <span className="nums font-semibold text-red">−{cr(t.peakCapitalAtRisk)}</span>
+              {" "}at M{t.months[t.troughIndex]}
+            </>
+          ) : (
+            <span className="font-semibold text-green">none — never cash-negative</span>
+          )}
           {t.breakevenMonth != null && <> · surfaces ~M{t.breakevenMonth.toFixed(1)}</>} · exit{" "}
           <span className={cx("nums font-semibold", t.exitValue >= 0 ? "text-green" : "text-red")}>
             {cr(t.exitValue)}
