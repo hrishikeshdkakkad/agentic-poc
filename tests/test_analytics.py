@@ -86,6 +86,33 @@ def test_net_worth_history_from_snapshots(seeded_db):
                      "liabilities": 400.0, "net_worth": 600.0}
 
 
+def test_net_worth_history_carries_forward_unsnapshotted_accounts(db):
+    # acc_chk snapshots on both dates; acc_cc (a manual/unhealthy account) only
+    # on the first. Its balance must carry forward, not vanish from later dates.
+    db.execute(
+        "INSERT INTO balance_snapshots VALUES ('2025-01-31', now(), 'acc_chk', 'CHASE', "
+        "'Chase', 'depository', 'checking', 1000.0, 1000.0, NULL, 'USD')")
+    db.execute(
+        "INSERT INTO balance_snapshots VALUES ('2025-01-31', now(), 'acc_cc', 'APPLE', "
+        "'Apple', 'credit', 'credit card', 400.0, NULL, 5000.0, 'USD')")
+    db.execute(
+        "INSERT INTO balance_snapshots VALUES ('2025-02-28', now(), 'acc_chk', 'CHASE', "
+        "'Chase', 'depository', 'checking', 1500.0, 1500.0, NULL, 'USD')")
+    out = analytics.net_worth_history()
+    last = out["history"][-1]
+    assert last["date"] == "2025-02-28"
+    assert last["liabilities"] == 400.0          # carried forward, not dropped
+    assert last["net_worth"] == 1100.0           # 1500 - 400
+    # a newer snapshot for the same account supersedes the carried value
+    db.execute(
+        "INSERT INTO balance_snapshots VALUES ('2025-03-31', now(), 'acc_cc', 'APPLE', "
+        "'Apple', 'credit', 'credit card', 250.0, NULL, 5000.0, 'USD')")
+    out2 = analytics.net_worth_history()
+    assert out2["history"][-1]["date"] == "2025-03-31"
+    assert out2["history"][-1]["liabilities"] == 250.0
+    assert out2["history"][-1]["net_worth"] == 1250.0  # chk carried at 1500
+
+
 def test_query_finances_select_works_and_writes_rejected(seeded_db):
     out = analytics.query_finances("SELECT count(*) AS n FROM transactions")
     assert out["rows"][0][0] == 8

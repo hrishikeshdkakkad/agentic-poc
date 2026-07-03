@@ -74,13 +74,35 @@ def compose_net_worth(shaped_accounts: list[dict]) -> dict:
 
 
 def net_worth_history(db_url: str | None = None) -> dict:
-    """Net worth per snapshot date, from balance_snapshots only."""
+    """Net worth per snapshot date, from balance_snapshots only.
+
+    Each date's figure carries forward the LATEST snapshot per account as of
+    that date, rather than summing only the rows written on that exact date.
+    Without the carry-forward, any account not snapshotted on a given day —
+    an item that was unhealthy for one sync, or a manual balance entered once
+    (e.g. Apple Card) — silently dropped out of net worth on every later date,
+    producing phantom dips and an understated headline. Matches the
+    latest-per-account convention get_debt_analysis / get_financial_health use.
+    (Trade-off, shared with those tools: an account that stops snapshotting
+    entirely keeps its last balance until a zero snapshot is recorded.)
+    """
     conn = storage.open_readonly(db_url)
     try:
         rows = conn.execute(
             """
+            WITH dates AS (SELECT DISTINCT snapshot_date AS d FROM balance_snapshots),
+            latest AS (
+                SELECT dates.d, bs.type, bs.current
+                FROM dates
+                JOIN LATERAL (
+                    SELECT DISTINCT ON (account_id) type, current
+                    FROM balance_snapshots
+                    WHERE snapshot_date <= dates.d
+                    ORDER BY account_id, snapshot_date DESC
+                ) bs ON true
+            )
             SELECT
-                snapshot_date,
+                d AS snapshot_date,
                 round(sum(CASE WHEN type IN ('depository','investment','brokerage')
                                THEN current ELSE 0 END)::numeric, 2) AS assets,
                 round(sum(CASE WHEN type IN ('credit','loan')
@@ -89,9 +111,9 @@ def net_worth_history(db_url: str | None = None) -> dict:
                                THEN current ELSE 0 END)
                      - sum(CASE WHEN type IN ('credit','loan')
                                THEN current ELSE 0 END))::numeric, 2) AS net_worth
-            FROM balance_snapshots
-            GROUP BY snapshot_date
-            ORDER BY snapshot_date
+            FROM latest
+            GROUP BY d
+            ORDER BY d
             """
         ).fetchall()
     finally:

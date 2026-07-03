@@ -65,3 +65,17 @@ def test_bad_match_type_rejected(db):
     import pytest
     with pytest.raises(ValueError, match="match_type"):
         storage.add_override("category", "food")
+
+
+def test_merchant_override_like_metacharacters_are_literal(db):
+    _seed(db)
+    # A '%' in a rule used to become a LIKE wildcard — this matched EVERY row.
+    storage.add_override("merchant", "%", set_primary="BROKEN")
+    assert storage.apply_overrides(db) == 0
+    # '_' used to match any single character ("che_ron" ~ "chevron").
+    storage.add_override("merchant", "che_ron", set_primary="BROKEN")
+    assert storage.apply_overrides(db) == 0
+    rows = db.execute(
+        "SELECT count(*) FROM transactions WHERE category_primary = 'BROKEN'"
+    ).fetchone()[0]
+    assert rows == 0

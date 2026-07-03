@@ -207,15 +207,22 @@ def get_debt_analysis(monthly_payment: float | None = None,
 # ---------------------------------------------------------------------------
 
 def get_portfolio_analysis(db_url: str | None = None) -> dict:
-    """Positions at the latest holdings snapshot, aggregated by symbol."""
+    """Positions at each account's latest holdings snapshot, aggregated by symbol.
+
+    Latest-per-ACCOUNT, not the single global max date: if one investment item
+    missed the most recent sync (unhealthy / holdings warning), a global-max
+    filter would silently drop that whole account from the portfolio.
+    """
     conn = storage.open_readonly(db_url)
     try:
         rows = conn.execute(
             """
-            SELECT symbol, security_name, security_type, account_id,
-                   quantity, market_value, cost_basis, snapshot_date
-            FROM holdings_snapshots
-            WHERE snapshot_date = (SELECT max(snapshot_date) FROM holdings_snapshots)
+            SELECT h.symbol, h.security_name, h.security_type, h.account_id,
+                   h.quantity, h.market_value, h.cost_basis, h.snapshot_date
+            FROM holdings_snapshots h
+            JOIN (SELECT account_id, max(snapshot_date) AS sd
+                  FROM holdings_snapshots GROUP BY account_id) l
+              ON l.account_id = h.account_id AND l.sd = h.snapshot_date
             """
         ).fetchall()
     finally:
@@ -228,7 +235,7 @@ def get_portfolio_analysis(db_url: str | None = None) -> dict:
                 "basis_coverage_pct": None, "total_unrealized_gain": None,
                 "source": "history_db"}
 
-    as_of = rows[0][7]
+    as_of = max(r[7] for r in rows)  # accounts may sit on different latest dates
     by_symbol: dict[str, dict] = {}
     basis_known_value = 0.0
     for (symbol, name, sec_type, acct, qty, mv, basis, _sd) in rows:
@@ -464,8 +471,21 @@ def get_net_worth_trajectory(milestone: float = 100_000.0, months: int = 6,
     finally:
         conn.close()
     monthly_flows = [{"month": r[0], "net": float(r[1])} for r in flow_rows]
-    cashflow_est = (round(sum(f["net"] for f in monthly_flows) / len(monthly_flows), 2)
-                    if monthly_flows else None)
+    # Average over the months the window actually covers WITH history, not just
+    # months that happen to have rows: a quiet month inside the window is a real
+    # ₹0-flow month (dividing by rows-only inflated the average), while months
+    # before the first transaction ever recorded are missing data, not zeros.
+    if monthly_flows:
+        window_months = []
+        m = window_start
+        while m < current_month_start:
+            window_months.append(m.strftime("%Y-%m"))
+            m = _shift_months(m, 1)
+        first_data_month = monthly_flows[0]["month"]
+        covered = [x for x in window_months if x >= first_data_month] or [first_data_month]
+        cashflow_est = round(sum(f["net"] for f in monthly_flows) / len(covered), 2)
+    else:
+        cashflow_est = None
 
     est = snapshot_est if snapshot_est is not None else cashflow_est
     est_source = ("snapshots" if snapshot_est is not None

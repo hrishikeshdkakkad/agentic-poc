@@ -517,6 +517,10 @@ def apply_overrides(conn: psycopg.Connection) -> int:
 
     Idempotent (overrides set absolute values), so safe to re-run after every
     sync/import. Returns the number of transaction rows touched.
+
+    match_value is a literal substring, so LIKE metacharacters in it (%/_/\\)
+    are escaped — an override for "50% off store" must not wildcard-match
+    unrelated merchants.
     """
     cur = conn.execute(
         """
@@ -527,7 +531,8 @@ def apply_overrides(conn: psycopg.Connection) -> int:
         WHERE (o.match_type = 'transaction' AND t.transaction_id = o.match_value)
            OR (o.match_type = 'merchant'
                AND lower(coalesce(t.merchant,'') || ' ' || coalesce(t.name,''))
-                   LIKE '%' || o.match_value || '%')
+                   LIKE '%' || replace(replace(replace(o.match_value,
+                        '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%')
         """
     )
     return cur.rowcount

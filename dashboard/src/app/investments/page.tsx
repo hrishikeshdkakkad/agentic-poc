@@ -109,6 +109,8 @@ export default function InvestmentsPage() {
       })),
     [activity.data],
   );
+  const activityTotal = activity.data?.total_matching ?? activityRows.length;
+  const activityTruncated = activityTotal > activityRows.length;
 
   const positionCols = useMemo<ColDef[]>(
     () => [
@@ -230,7 +232,14 @@ export default function InvestmentsPage() {
 
       <DataCard<ActivityRow>
         title="Investment activity"
-        subtitle="Trades, dividends & fees from your synced history — instant, no Plaid call"
+        subtitle={
+          // The server clamps list_investment_transactions to 500 rows per call
+          // regardless of the requested limit — say so instead of presenting a
+          // silently truncated ledger as complete.
+          activityTruncated
+            ? `Latest ${activityRows.length.toLocaleString()} of ${activityTotal.toLocaleString()} — trades, dividends & fees from your synced history`
+            : "Trades, dividends & fees from your synced history — instant, no Plaid call"
+        }
         icon={<IconSync size={16} />}
         rowData={activityRows}
         columnDefs={activityCols}

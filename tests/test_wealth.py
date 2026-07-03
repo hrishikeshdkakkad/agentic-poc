@@ -156,6 +156,19 @@ def test_portfolio_empty(db):
     assert out["positions"] == [] and out["total_value"] == 0.0
 
 
+def test_portfolio_keeps_account_whose_latest_snapshot_is_older(db):
+    # fid_1 missed the most recent sync — a global max(snapshot_date) filter
+    # silently dropped the whole account; latest-per-account keeps it.
+    _holding(db, "2026-06-10", "AMZN", "equity", 10, 200.0, 2000.0, None, acct="rh_1")
+    _holding(db, "2026-06-09", "BIL", "etf", 5, 90.0, 450.0, None, acct="fid_1")
+    _holding(db, "2026-06-01", "BIL", "etf", 5, 89.0, 445.0, None, acct="fid_1")  # superseded
+    out = wealth.get_portfolio_analysis()
+    assert out["as_of"] == "2026-06-10"
+    assert out["total_value"] == pytest.approx(2450.0)
+    assert {p["symbol"] for p in out["positions"]} == {"AMZN", "BIL"}
+    assert {p["symbol"]: p["market_value"] for p in out["positions"]}["BIL"] == pytest.approx(450.0)
+
+
 # ---------------------------------------------------------------------------
 # get_income_analysis
 # ---------------------------------------------------------------------------
@@ -258,6 +271,18 @@ def test_trajectory_falls_back_to_cashflow_when_snapshots_thin(db):
     assert out["estimate_source"] == "cashflow"
     assert out["estimated_monthly_change"] == pytest.approx(1000.0, abs=1.0)
     assert out["milestone"]["months_away"] == pytest.approx(9.95, abs=0.5)
+
+
+def test_trajectory_cashflow_counts_quiet_months_in_the_window(db):
+    _balance(db, "2026-06-08", "acc_chk", 90000.0)
+    _balance(db, "2026-06-09", "acc_chk", 90050.0)
+    # +$3,000 in March and May, NOTHING in April: April is a real $0-flow month,
+    # so the average is 6000/3 = 2000 — not 6000/2 = 3000 (the old rows-only divisor).
+    _tx(db, "i1", "2026-03-15", -3000.0, "INCOME", "Acme")
+    _tx(db, "i2", "2026-05-15", -3000.0, "INCOME", "Acme")
+    out = wealth.get_net_worth_trajectory(as_of=date(2026, 6, 10))
+    assert out["estimate_source"] == "cashflow"
+    assert out["estimated_monthly_change"] == pytest.approx(2000.0, abs=1.0)
 
 
 def test_trajectory_without_any_snapshots(db):
